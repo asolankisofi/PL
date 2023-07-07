@@ -1,0 +1,760 @@
+-- We are trying to estimate the impact of deploying Direct Pay option across all loan purposes and coborrowing, using the data from CC Payoff purpose which already has DP enabled, since 2021.
+-- March 2023
+/* ----------------------------------------------------------------------------------------------------------------
+   ----------------------------------------------------------------------------------------------------------------
+   ----------------------------------------------------------------------------------------------------------------
+                                                Info
+   ----------------------------------------------------------------------------------------------------------------
+   ----------------------------------------------------------------------------------------------------------------
+   ----------------------------------------------------------------------------------------------------------------
+ */
+-- Get all funded loans from May 2020 to Feb 2023
+drop table if exists TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis;
+create table TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis as
+    select
+         AF.DW_APPLICATION_ID,AF.ID, lbd.loan_id,lbd.APPLICANT_ID,lbd.CURRENT_OWNER_NAME, lbd.ORIG_GROSS_INT_RATE, lbd.tier,af2.COBORROWER_INDICATOR,
+           case
+               when lbd.tier between 1 and 8 then 'Main'
+               when lbd.tier between 31 and 34 then 'Prime'
+               else 'Pagaya' end as Product,
+           af.PL_FUNDS_USE, lbd.CONFIRMED_FRAUD,  case when b.uid = af.applicant_id then 1 else 0 end as fraud_atk,
+           IFF(AP.DIRECT_PAY_DEBT_TOTAL > 0, 1, 0) as DIRECT_PAY_IND, lbd.FICO_SCORE
+        , case when lbd.FICO_SCORE < 300 or lbd.FICO_SCORE > 850 then '01. Invalid'
+               when lbd.FICO_SCORE is null then '02. Missing'
+               when lbd.FICO_SCORE < 680 then '03. 300-679'
+               when lbd.FICO_SCORE < 700 then '04. 680-699'
+               when lbd.FICO_SCORE < 740 then '05. 700-739'
+               when lbd.FICO_SCORE < 780 then '06. 740-779'
+               else '07. 780-850' end as fico_band
+        , substr(lbd.ORIGINATION_DATE,1,7) as orig_mon
+        ,lbd.ORIGINAL_PRIN as orig_prin
+        ,case when lbm2.DAYS_PAST_DUE >= 30 then 1
+                   when lbm2.LOAN_STATUS in ('CHARGE OFF','CHARGE OFF PIF','CHARGE OFF COMPLETE','WRITE OFF') then 1
+                   else 0 end as mob3_dpd30p_co_ind
+        ,case when lbm2.DAYS_PAST_DUE >= 30 then lbm2.CURRENT_PRIN
+                   when lbm2.LOAN_STATUS in ('CHARGE OFF','CHARGE OFF PIF','CHARGE OFF COMPLETE','WRITE OFF') then -lbd.CHARGE_OFF_PRIN
+                   else 0 end as mob3_dpd30p_co_prin
+        ,case when lbm.DAYS_PAST_DUE >= 60 then 1
+                   when lbm.LOAN_STATUS in ('CHARGE OFF','CHARGE OFF PIF','CHARGE OFF COMPLETE','WRITE OFF') then 1
+                   else 0 end as mob6_dpd60p_co_ind
+        ,case when lbm.DAYS_PAST_DUE >= 60 then lbm.CURRENT_PRIN
+                   when lbm.LOAN_STATUS in ('CHARGE OFF','CHARGE OFF PIF','CHARGE OFF COMPLETE','WRITE OFF') then -lbd.CHARGE_OFF_PRIN
+                   else 0 end as mob6_dpd60p_co_prin
+        ,case when lbm5.LOAN_STATUS in ('CHARGE OFF','CHARGE OFF PIF','CHARGE OFF COMPLETE','WRITE OFF') then -lbd.CHARGE_OFF_PRIN
+                   else 0 end as yr1_co_dol
+        ,case when lbm5.LOAN_STATUS in ('CHARGE OFF','CHARGE OFF PIF','CHARGE OFF COMPLETE','WRITE OFF') then 1
+                   else 0 end as yr1_co_unit
+
+      from DWMART.LOANS_BLENDED_DAILY lbd
+left join DWMART.LOANS_BLENDED_MONTHLY lbm on lbd.LOAN_ID = lbm.LOAN_ID and lbm.SEASONING_ORIG = 6
+left join DWMART.LOANS_BLENDED_MONTHLY lbm2 on lbd.LOAN_ID = lbm2.LOAN_ID and lbm2.SEASONING_ORIG = 3
+left join DWMART.LOANS_BLENDED_MONTHLY lbm5 on lbd.LOAN_ID = lbm5.LOAN_ID and lbm5.SEASONING_ORIG = 12
+LEFT JOIN DWMART.APPLICATIONS_FILE AF on lbd.ID = AF.ID
+left join tdm_sandbox.sandbox.plmb_fraud_uid_list as b on af.applicant_id = b.uid
+LEFT JOIN TDM_RISK_MGMT_HUB.MODELED.APPLICATIONS AP on AF.ID = AP.BUSINESS_APPLICATION_ID
+left join TDM_RISK_MGMT_HUB.MODELED.APPLICATIONS_FILE af2 on AF.ID = Af2.id
+    where lbd.APPLICATION_TYPE in ('PL')
+      and lbd.ORIGINATION_DATE between '2020-05-01' and '2023-02-28'
+      and AF.ID <> 0;
+
+/* ----------------------------------------------------------------------------------------------------------------
+   ----------------------------------------------------------------------------------------------------------------
+   ----------------------------------------------------------------------------------------------------------------
+                                            Bureau data
+   ----------------------------------------------------------------------------------------------------------------
+   ----------------------------------------------------------------------------------------------------------------
+   ----------------------------------------------------------------------------------------------------------------
+ */
+ -- Get bureau data @ the time of origination
+alter table TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis add
+    total_balance_open_trades float,
+    total_balance_open_bc_trades float,
+    total_balance_open_trades_pri float,
+    total_balance_open_bc_trades_pri float,
+    total_balance_open_trades_cos float,
+    total_balance_open_bc_trades_cos float;
+
+/*
+update TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis set
+total_balance_open_trades=null,
+total_balance_open_bc_trades=null,
+total_balance_open_trades_pri=null,
+total_balance_open_bc_trades_pri=null,
+total_balance_open_trades_cos=null,
+total_balance_open_bc_trades_cos=null;
+*/
+
+update TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis as a
+set  a.total_balance_open_trades_pri=b.ALL5020_PRI
+    ,a.total_balance_open_trades_cos=b.ALL5020_COS
+    ,a.total_balance_open_bc_trades_pri=b.BCC5020_PRI
+    ,a.total_balance_open_bc_trades_cos=b.BCC5020_COS
+from (
+    select af.ID
+    , di.UW_RESULT:applicationDecisionInfo:applicationType::string as app_type
+    --, try_cast(coalesce(di.UW_REQUEST:application:applicantsList[0]:creditPull:attributes:ALL0400:value::string, di.UW_REQUEST:application:applicantsList[0]:creditPull:attributes:ALL0400:originalValue::string) as bigint) as ALL0400_PRI
+    --, try_cast(coalesce(di.UW_REQUEST:application:applicantsList[1]:creditPull:attributes:ALL0400:value::string, di.UW_REQUEST:application:applicantsList[1]:creditPull:attributes:ALL0400:originalValue::string) as bigint) as ALL0400_COS
+    , try_cast(coalesce(di.UW_REQUEST:application:applicantsList[0]:creditPull:attributes:ALL5020:value::string, di.UW_REQUEST:application:applicantsList[0]:creditPull:attributes:ALL5020:originalValue::string) as bigint) as ALL5020_PRI
+    , try_cast(coalesce(di.UW_REQUEST:application:applicantsList[1]:creditPull:attributes:ALL5020:value::string, di.UW_REQUEST:application:applicantsList[1]:creditPull:attributes:ALL5020:originalValue::string) as bigint) as ALL5020_COS
+    --, try_cast(coalesce(di.UW_REQUEST:application:applicantsList[0]:creditPull:attributes:BCC0400:value::string, di.UW_REQUEST:application:applicantsList[0]:creditPull:attributes:BCC0400:originalValue::string) as bigint) as BCC0400_PRI
+    --, try_cast(coalesce(di.UW_REQUEST:application:applicantsList[1]:creditPull:attributes:BCC0400:value::string, di.UW_REQUEST:application:applicantsList[1]:creditPull:attributes:BCC0400:originalValue::string) as bigint) as BCC0400_COS
+    , try_cast(coalesce(di.UW_REQUEST:application:applicantsList[0]:creditPull:attributes:BCC5020:value::string, di.UW_REQUEST:application:applicantsList[0]:creditPull:attributes:BCC5020:originalValue::string) as bigint) as BCC5020_PRI
+    , try_cast(coalesce(di.UW_REQUEST:application:applicantsList[1]:creditPull:attributes:BCC5020:value::string, di.UW_REQUEST:application:applicantsList[1]:creditPull:attributes:BCC5020:originalValue::string) as bigint) as BCC5020_COS
+     from (
+     select af.ID,af2.COBORROWER_INDICATOR from DWMART.APPLICATIONS_FILE af
+     left join TDM_RISK_MGMT_HUB.MODELED.APPLICATIONS_FILE af2 on AF.ID = Af2.id
+     where af.APPLICATION_TYPE in ('PL')
+     and af.id<>0
+     ) af
+    left join TDM_UNDERWRITING.CLEANSED.DIODES di on af.ID = di.TARGET_ID and di.TARGET_TYPE = 'APP'
+    where di.RESULT_TYPE = 'OFFICIAL'
+      and ((af.COBORROWER_INDICATOR = 'N' and app_type = 'Single') or (af.COBORROWER_INDICATOR = 'Y' and app_type = 'Joint'))
+  qualify row_number() over (partition by af.ID order by di.DATE_OF_UNDERWRITING) = 1
+    ) b
+where a.id=b.id;
+
+-- Validating % of bureau data available
+select count(*),sum(case when coalesce(total_balance_open_trades_pri,total_balance_open_trades_cos,total_balance_open_bc_trades_pri
+    ,total_balance_open_bc_trades_cos) is not null then 1 else 0 end) as buro_data
+    ,count(total_balance_open_trades_pri) as total_balance_open_trades_pri
+    ,count(total_balance_open_trades_cos) as total_balance_open_trades_cos
+    ,count(total_balance_open_bc_trades_pri) as total_balance_open_bc_trades_pri
+    ,count(total_balance_open_bc_trades_cos) as total_balance_open_bc_trades_cos
+from TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis;
+
+select orig_mon ,count(*),sum(case when coalesce(total_balance_open_trades_pri,total_balance_open_trades_cos,total_balance_open_bc_trades_pri
+    ,total_balance_open_bc_trades_cos) is not null then 1 else 0 end)/count(*) as buro_data
+from TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis
+group by 1
+order by 1;
+
+update TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis set
+total_balance_open_trades=coalesce(total_balance_open_trades_pri,0)+coalesce(total_balance_open_trades_cos,0),
+total_balance_open_bc_trades=coalesce(total_balance_open_bc_trades_pri,0)+coalesce(total_balance_open_bc_trades_cos,0);
+
+alter table TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis add COBORROWER_IND bigint;
+update TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis set COBORROWER_IND=case when COBORROWER_INDICATOR='Y' then 1 else 0 end;
+
+alter table TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis add
+    bcbalance_loanamt_ratio varchar(20),
+    bcbalance_totbalance_ratio varchar(20),
+    totbalance_loanamt_ratio varchar(20);
+
+select total_balance_open_trades,total_balance_open_bc_trades
+     from TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis
+    where total_balance_open_trades<>0 and total_balance_open_bc_trades/total_balance_open_trades<0 and asd_2303_dpay_analysis.total_balance_open_bc_trades<999999990
+
+-- Choosing best bins
+select case
+    when total_balance_open_bc_trades>=999999990 or coalesce(total_balance_open_trades,0)=0 then '0 No info'
+    when total_balance_open_bc_trades/total_balance_open_trades between 0 and 0.1 then '1 [0-10%]'
+    when total_balance_open_bc_trades/total_balance_open_trades between 0.1 and 0.2 then '2 [10-20%]'
+    when total_balance_open_bc_trades/total_balance_open_trades between 0.2 and 0.4 then '3 (20-40%]'
+    when total_balance_open_bc_trades/total_balance_open_trades between 0.4 and 0.6 then '4 (40-60%]'
+    when total_balance_open_bc_trades/total_balance_open_trades between 0.6 and 0.8 then '5 (60-80%]'
+    when total_balance_open_bc_trades/total_balance_open_trades between 0.8 and 0.9999 then '6 (80-99.99%]'
+    else '7 100%' end as r_pct,count(*)
+from TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis
+where substring(orig_mon,1,4) in ('2022','2023')
+group by 1
+order by 1
+
+select case
+    when total_balance_open_bc_trades>=999999990 /*or coalesce(orig_prin,0)=0*/ then '0 No info'
+    when total_balance_open_bc_trades/orig_prin between 0 and 0.2 then '1 [0-20%]'
+    when total_balance_open_bc_trades/orig_prin between 0.2 and 0.4 then '2 (20-40%]'
+    when total_balance_open_bc_trades/orig_prin between 0.4 and 0.6 then '3 (40-60%]'
+    when total_balance_open_bc_trades/orig_prin between 0.6 and 0.8 then '4 (60-80%]'
+    when total_balance_open_bc_trades/orig_prin between 0.8 and 1 then '5 (80-100%]'
+    when total_balance_open_bc_trades/orig_prin between 1 and 1.5 then '6 (100-150%]'
+    else '7>150%' end as r_pct,count(*)
+from TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis
+where substring(orig_mon,1,4) in ('2022','2023')
+group by 1
+order by 1
+
+select case
+    when total_balance_open_trades>=999999990 /*or coalesce(orig_prin,0)=0*/ then '0 No info'
+    when total_balance_open_trades/orig_prin between 0 and 2 then '1 [0-2]'
+    when total_balance_open_trades/orig_prin between 2 and 5 then '2 (2-5]'
+    when total_balance_open_trades/orig_prin between 5 and 10 then '3 (5-10]'
+    when total_balance_open_trades/orig_prin between 10 and 15 then '4 (10-15]'
+    when total_balance_open_trades/orig_prin between 15 and 20 then '5 (15-20]'
+    when total_balance_open_trades/orig_prin between 20 and 30 then '6 (20-30]'
+    else '7>30' end as r_pct,count(*)
+from TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis
+where substring(orig_mon,1,4) in ('2022','2023')
+group by 1
+order by 1
+
+update TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis set
+    bcbalance_totbalance_ratio=case
+    when total_balance_open_bc_trades>=999999990 or coalesce(total_balance_open_trades,0)=0 then '0 No info'
+    when total_balance_open_bc_trades/total_balance_open_trades between 0 and 0.1 then '1 [0-10%]'
+    when total_balance_open_bc_trades/total_balance_open_trades between 0.1 and 0.2 then '2 [10-20%]'
+    when total_balance_open_bc_trades/total_balance_open_trades between 0.2 and 0.4 then '3 (20-40%]'
+    when total_balance_open_bc_trades/total_balance_open_trades between 0.4 and 0.6 then '4 (40-60%]'
+    when total_balance_open_bc_trades/total_balance_open_trades between 0.6 and 0.8 then '5 (60-80%]'
+    when total_balance_open_bc_trades/total_balance_open_trades between 0.8 and 0.9999 then '6 (80-99.99%]'
+    else '7 100%' end,
+    bcbalance_loanamt_ratio=case
+    when total_balance_open_bc_trades>=999999990 /*or coalesce(orig_prin,0)=0*/ then '0 No info'
+    when total_balance_open_bc_trades/orig_prin between 0 and 0.2 then '1 [0-20%]'
+    when total_balance_open_bc_trades/orig_prin between 0.2 and 0.4 then '2 (20-40%]'
+    when total_balance_open_bc_trades/orig_prin between 0.4 and 0.6 then '3 (40-60%]'
+    when total_balance_open_bc_trades/orig_prin between 0.6 and 0.8 then '4 (60-80%]'
+    when total_balance_open_bc_trades/orig_prin between 0.8 and 1 then '5 (80-100%]'
+    when total_balance_open_bc_trades/orig_prin between 1 and 1.5 then '6 (100-150%]'
+    else '7>150%' end,
+    totbalance_loanamt_ratio=case
+    when total_balance_open_trades>=999999990 /*or coalesce(orig_prin,0)=0*/ then '0 No info'
+    when total_balance_open_trades/orig_prin between 0 and 2 then '1 [0-2]'
+    when total_balance_open_trades/orig_prin between 2 and 5 then '2 (2-5]'
+    when total_balance_open_trades/orig_prin between 5 and 10 then '3 (5-10]'
+    when total_balance_open_trades/orig_prin between 10 and 15 then '4 (10-15]'
+    when total_balance_open_trades/orig_prin between 15 and 20 then '5 (15-20]'
+    when total_balance_open_trades/orig_prin between 20 and 30 then '6 (20-30]'
+    else '7>30' end;
+
+select bcbalance_totbalance_ratio,count(*) from TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis group by 1 order by 1
+select bcbalance_loanamt_ratio,count(*) from TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis group by 1 order by 1
+select totbalance_loanamt_ratio,count(*) from TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis group by 1 order by 1
+
+-- Featuring selection (Pasted on DP Analysis.xslx)
+
+select ORIG_MON,COBORROWER_IND,product,PL_FUNDS_USE,case when PL_FUNDS_USE in ('Credit card payoff','Pay off credit cards') then 1 else 0 end as cc_payoff,
+case when CONFIRMED_FRAUD=0 and fraud_atk=0 then 0 else 1 end as fraud,DIRECT_PAY_ind,fico_band,
+bcbalance_totbalance_ratio,bcbalance_loanamt_ratio,totbalance_loanamt_ratio
+,count(*) as pl
+,sum(coalesce(ORIG_PRIN,0)) as ORIG_PRIN
+,sum(coalesce(YR1_CO_UNIT,0)) as YR1_CO_IND
+,sum(coalesce(YR1_CO_DOL,0)) as YR1_CO_PRIN
+,sum(coalesce(case when TOTAL_BALANCE_OPEN_TRADES<999999990 then TOTAL_BALANCE_OPEN_TRADES else null end,0)) as TOTAL_BALANCE_OPEN_TRADES
+,sum(coalesce(case when TOTAL_BALANCE_OPEN_BC_TRADES<999999990 then TOTAL_BALANCE_OPEN_BC_TRADES else null end ,0)) as TOTAL_BALANCE_OPEN_BC_TRADES
+
+from TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis
+group by 1,2,3,4,5,6,7,8,9,10,11;
+
+-- We go with TOTAL_BALANCE_OPEN_BC_TRADES to predict Direct Pay for other loan purposes and coborrowers
+-- Six bins (16th percetile)
+select
+       percentile_cont(0.1666) within group (order by TOTAL_BALANCE_OPEN_BC_TRADES) as p16,
+       percentile_cont(0.3333) within group (order by TOTAL_BALANCE_OPEN_BC_TRADES) as p33,
+       percentile_cont(0.50) within group (order by TOTAL_BALANCE_OPEN_BC_TRADES) as p50,
+       percentile_cont(0.6666) within group (order by TOTAL_BALANCE_OPEN_BC_TRADES) as p66,
+       percentile_cont(0.8333) within group (order by TOTAL_BALANCE_OPEN_BC_TRADES) as p83
+from TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis
+where TOTAL_BALANCE_OPEN_BC_TRADES<999999990
+and CONFIRMED_FRAUD=0 and fraud_atk=0 and COBORROWER_IND=0 and  product='Main'
+and PL_FUNDS_USE in ('Credit card payoff','Pay off credit cards')
+
+select case
+    when TOTAL_BALANCE_OPEN_BC_TRADES<2000 then '0 [0-2k)'
+    when TOTAL_BALANCE_OPEN_BC_TRADES<10000 then '1 [2k-10k)'
+    when TOTAL_BALANCE_OPEN_BC_TRADES<17500 then '2 [10k-17.5k)'
+    when TOTAL_BALANCE_OPEN_BC_TRADES<26000 then '3 [17.5k-26k)'
+    when TOTAL_BALANCE_OPEN_BC_TRADES<40000 then '4 [26k-40k)'
+    else '5 >40k' end as rank,count(*),sum(DIRECT_PAY_IND)/count(*),sum(DIRECT_PAY_IND) as DIRECT_PAY_IND
+from TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis
+where TOTAL_BALANCE_OPEN_BC_TRADES<999999990
+and CONFIRMED_FRAUD=0 and fraud_atk=0 and COBORROWER_IND=0 and  product='Main' and PL_FUNDS_USE in ('Credit card payoff','Pay off credit cards')
+group by 1
+order by 1
+
+select case
+    when TOTAL_BALANCE_OPEN_BC_TRADES<2000 then '0 [0-2k)'
+    when TOTAL_BALANCE_OPEN_BC_TRADES<10000 then '1 [2k-10k)'
+    when TOTAL_BALANCE_OPEN_BC_TRADES<17500 then '2 [10k-17.5k)'
+    when TOTAL_BALANCE_OPEN_BC_TRADES<26000 then '3 [17.5k-26k)'
+    when TOTAL_BALANCE_OPEN_BC_TRADES<40000 then '4 [26k-40k)'
+    else '5 >40k' end as rank,count(*),sum(DIRECT_PAY_IND)/count(*),sum(DIRECT_PAY_IND) as DIRECT_PAY_IND
+from TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis
+where TOTAL_BALANCE_OPEN_BC_TRADES<999999990
+and CONFIRMED_FRAUD=0 and fraud_atk=0 and COBORROWER_IND=0 and  product='Main' and PL_FUNDS_USE in ('Credit card payoff','Pay off credit cards')
+and orig_mon in ('2022-01','2022-02')
+group by 1
+order by 1
+
+
+select case
+    when TOTAL_BALANCE_OPEN_BC_TRADES<2000 then '0 [0-2k)'
+    when TOTAL_BALANCE_OPEN_BC_TRADES<10000 then '1 [2k-10k)'
+    when TOTAL_BALANCE_OPEN_BC_TRADES<17500 then '2 [10k-17.5k)'
+    when TOTAL_BALANCE_OPEN_BC_TRADES<26000 then '3 [17.5k-26k)'
+    when TOTAL_BALANCE_OPEN_BC_TRADES<40000 then '4 [26k-40k)'
+    else '5 >40k' end as rank,count(*),sum(DIRECT_PAY_IND)/count(*),sum(DIRECT_PAY_IND) as DIRECT_PAY_IND
+from TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis
+where TOTAL_BALANCE_OPEN_BC_TRADES<999999990
+and CONFIRMED_FRAUD=0 and fraud_atk=0 and COBORROWER_IND=0 and  product='Main' and PL_FUNDS_USE in ('Credit card payoff','Pay off credit cards')
+and orig_mon in ('2023-01','2023-02')
+group by 1
+order by 1
+
+-- Another contender is TOTAL_BALANCE_OPEN_BC_TRADES/ORIG_PRIN but its WOE is not monotonous
+
+select
+       percentile_cont(0.1666) within group (order by TOTAL_BALANCE_OPEN_BC_TRADES/ORIG_PRIN) as p16,
+       percentile_cont(0.3333) within group (order by TOTAL_BALANCE_OPEN_BC_TRADES/ORIG_PRIN) as p33,
+       percentile_cont(0.50) within group (order by TOTAL_BALANCE_OPEN_BC_TRADES/ORIG_PRIN) as p50,
+       percentile_cont(0.6666) within group (order by TOTAL_BALANCE_OPEN_BC_TRADES/ORIG_PRIN) as p66,
+       percentile_cont(0.8333) within group (order by TOTAL_BALANCE_OPEN_BC_TRADES/ORIG_PRIN) as p83
+from TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis
+where TOTAL_BALANCE_OPEN_BC_TRADES<999999990
+and CONFIRMED_FRAUD=0 and fraud_atk=0 and COBORROWER_IND=0 and  product='Main'
+and PL_FUNDS_USE in ('Credit card payoff','Pay off credit cards')
+
+select case
+    when TOTAL_BALANCE_OPEN_BC_TRADES/ORIG_PRIN<0.10 then '0 [0-10%)'
+    when TOTAL_BALANCE_OPEN_BC_TRADES/ORIG_PRIN<0.53 then '1 [10-53%)'
+    when TOTAL_BALANCE_OPEN_BC_TRADES/ORIG_PRIN<0.80 then '2 [53-80%)'
+    when TOTAL_BALANCE_OPEN_BC_TRADES/ORIG_PRIN<1 then '3 [80-100%)'
+    when TOTAL_BALANCE_OPEN_BC_TRADES/ORIG_PRIN<1.3 then '4 [100-130%)'
+    else '5 >130%' end as rank,count(*),sum(DIRECT_PAY_IND)/count(*),sum(DIRECT_PAY_IND) as DIRECT_PAY_IND
+from TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis
+where TOTAL_BALANCE_OPEN_BC_TRADES<999999990
+and CONFIRMED_FRAUD=0 and fraud_atk=0 and COBORROWER_IND=0 and  product='Main' and PL_FUNDS_USE in ('Credit card payoff','Pay off credit cards')
+and orig_mon in ('2022-01','2022-02')
+group by 1
+order by 1
+
+select case
+    when TOTAL_BALANCE_OPEN_BC_TRADES/ORIG_PRIN<0.10 then '0 [0-10%)'
+    when TOTAL_BALANCE_OPEN_BC_TRADES/ORIG_PRIN<0.53 then '1 [10-53%)'
+    when TOTAL_BALANCE_OPEN_BC_TRADES/ORIG_PRIN<0.80 then '2 [53-80%)'
+    when TOTAL_BALANCE_OPEN_BC_TRADES/ORIG_PRIN<1 then '3 [80-100%)'
+    when TOTAL_BALANCE_OPEN_BC_TRADES/ORIG_PRIN<1.3 then '4 [100-130%)'
+    else '5 >130%' end as rank,count(*),sum(DIRECT_PAY_IND)/count(*),sum(DIRECT_PAY_IND) as DIRECT_PAY_IND
+from TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis
+where TOTAL_BALANCE_OPEN_BC_TRADES<999999990
+and CONFIRMED_FRAUD=0 and fraud_atk=0 and COBORROWER_IND=0 and  product='Main' and PL_FUNDS_USE in ('Credit card payoff','Pay off credit cards')
+and orig_mon in ('2023-01','2023-02')
+group by 1
+order by 1
+
+select
+       percentile_cont(0.1666) within group (order by TOTAL_BALANCE_OPEN_BC_TRADES) as p16,
+       percentile_cont(0.3333) within group (order by TOTAL_BALANCE_OPEN_BC_TRADES) as p33,
+       percentile_cont(0.50) within group (order by TOTAL_BALANCE_OPEN_BC_TRADES) as p50,
+       percentile_cont(0.6666) within group (order by TOTAL_BALANCE_OPEN_BC_TRADES) as p66,
+       percentile_cont(0.8333) within group (order by TOTAL_BALANCE_OPEN_BC_TRADES) as p83
+from TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis
+where TOTAL_BALANCE_OPEN_BC_TRADES<999999990
+and CONFIRMED_FRAUD=0 and fraud_atk=0 and COBORROWER_IND=0 and  product='Main'
+and PL_FUNDS_USE in ('Credit card payoff','Pay off credit cards')
+and substring(orig_mon,1,4) in ('2022','2023')
+
+select case
+    when TOTAL_BALANCE_OPEN_BC_TRADES<1000 then '0 [0-1k)'
+    when TOTAL_BALANCE_OPEN_BC_TRADES<4000 then '1 [1k-4k)'
+    when TOTAL_BALANCE_OPEN_BC_TRADES<10000 then '2 [4k-10k)'
+    when TOTAL_BALANCE_OPEN_BC_TRADES<20000 then '3 [10k-20k)'
+    when TOTAL_BALANCE_OPEN_BC_TRADES<30000 then '4 [20k-30k)'
+    when TOTAL_BALANCE_OPEN_BC_TRADES<50000 then '5 [30k-50k)'
+    else '6 >50k' end as rank,count(*),sum(DIRECT_PAY_IND)/count(*),sum(DIRECT_PAY_IND) as DIRECT_PAY_IND
+from TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis
+where TOTAL_BALANCE_OPEN_BC_TRADES<999999990
+and CONFIRMED_FRAUD=0 and fraud_atk=0 and COBORROWER_IND=0 and  product='Main' and PL_FUNDS_USE in ('Credit card payoff','Pay off credit cards')
+and substring(orig_mon,1,4) in ('2022','2023')
+group by 1
+order by 1
+
+
+select case
+    when TOTAL_BALANCE_OPEN_BC_TRADES<1000 then '0 [0-1k)'
+    when TOTAL_BALANCE_OPEN_BC_TRADES<4000 then '1 [1k-4k)'
+    when TOTAL_BALANCE_OPEN_BC_TRADES<10000 then '2 [4k-10k)'
+    when TOTAL_BALANCE_OPEN_BC_TRADES<20000 then '3 [10k-20k)'
+    when TOTAL_BALANCE_OPEN_BC_TRADES<30000 then '4 [20k-30k)'
+    when TOTAL_BALANCE_OPEN_BC_TRADES<50000 then '5 [30k-50k)'
+    else '6 >50k' end as rank,count(*),sum(DIRECT_PAY_IND)/count(*),sum(DIRECT_PAY_IND) as DIRECT_PAY_IND
+from TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis
+where TOTAL_BALANCE_OPEN_BC_TRADES<999999990
+and CONFIRMED_FRAUD=0 and fraud_atk=0
+--and COBORROWER_IND=0
+and product in ('Main','Prime')
+--and PL_FUNDS_USE not in ('Credit card payoff','Pay off credit cards')
+and substring(orig_mon,1,4) in ('2022','2023')
+group by 1
+order by 1
+
+/* ----------------------------------------------------------------------------------------------------------------
+   ----------------------------------------------------------------------------------------------------------------
+   ----------------------------------------------------------------------------------------------------------------
+                                                Main pivot
+   ----------------------------------------------------------------------------------------------------------------
+   ----------------------------------------------------------------------------------------------------------------
+   ----------------------------------------------------------------------------------------------------------------
+ */
+-- Pasted on DP_estimation Excel files
+select ORIG_MON,COBORROWER_IND,product,PL_FUNDS_USE,case when PL_FUNDS_USE in ('Credit card payoff','Pay off credit cards') then 1 else 0 end as cc_payoff,
+case when CONFIRMED_FRAUD=0 and fraud_atk=0 then 0 else 1 end as fraud,DIRECT_PAY_ind,
+case
+    when TOTAL_BALANCE_OPEN_BC_TRADES_ALT>999999990 or TOTAL_BALANCE_OPEN_BC_TRADES_ALT is null then '8 No info'
+    when TOTAL_BALANCE_OPEN_BC_TRADES_ALT<1000 then '1 [0-1k)'
+    when TOTAL_BALANCE_OPEN_BC_TRADES_ALT<4000 then '2 [1k-4k)'
+    when TOTAL_BALANCE_OPEN_BC_TRADES_ALT<10000 then '3 [4k-10k)'
+    when TOTAL_BALANCE_OPEN_BC_TRADES_ALT<20000 then '4 [10k-20k)'
+    when TOTAL_BALANCE_OPEN_BC_TRADES_ALT<30000 then '5 [20k-30k)'
+    when TOTAL_BALANCE_OPEN_BC_TRADES_ALT<50000 then '6 [30k-50k)'
+    else '7 >50k' end as totbalance_openbc_trades
+,count(*) as pl
+,sum(DIRECT_PAY_IND) as direct_pay_loans
+,sum(coalesce(ORIG_PRIN,0)) as ORIG_PRIN
+,sum(coalesce(YR1_CO_UNIT,0)) as YR1_CO_IND
+,sum(coalesce(YR1_CO_DOL,0)) as YR1_CO_PRIN
+from (select *,case
+    when COBORROWER_IND=0 then TOTAL_BALANCE_OPEN_BC_TRADES
+    when TOTAL_BALANCE_OPEN_BC_TRADES_PRI>=999999990 then TOTAL_BALANCE_OPEN_BC_TRADES_COS
+    when TOTAL_BALANCE_OPEN_BC_TRADES_COS>=999999990 then TOTAL_BALANCE_OPEN_BC_TRADES_PRI
+else greatest(coalesce(TOTAL_BALANCE_OPEN_BC_TRADES_PRI,0),coalesce(TOTAL_BALANCE_OPEN_BC_TRADES_COS,0))
+end as TOTAL_BALANCE_OPEN_BC_TRADES_ALT
+from TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis)
+group by 1,2,3,4,5,6,7,8;
+
+-- Trying to explain difference in CO between Direct Pay and non DP
+
+select PL_FUNDS_USE, avg(FICO_SCORE)
+from TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis
+where fraud_atk=0 and CONFIRMED_FRAUD=0 and product<>'Pagaya'
+and orig_mon in ('2023-01','2023-02')
+and substring(orig_mon,1,4) in ('2022','2023')
+group by 1
+
+alter table TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis add INITIAL_TERM int;
+
+update TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis as a
+    set a.INITIAL_TERM=lbd.INITIAL_TERM
+    from DWMART.LOANS_BLENDED_DAILY lbd where lbd.ID = a.ID;
+
+select count(*),count(INITIAL_TERM) from  TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis
+
+alter table TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis add open_trades int;
+
+update TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis as a
+set  a.open_trades=coalesce(b.ALL0400_PRI,0)+coalesce(b.ALL0400_COS,0)
+from (
+    select af.ID
+    , di.UW_RESULT:applicationDecisionInfo:applicationType::string as app_type
+    , try_cast(coalesce(di.UW_REQUEST:application:applicantsList[0]:creditPull:attributes:ALL0400:value::string, di.UW_REQUEST:application:applicantsList[0]:creditPull:attributes:ALL0400:originalValue::string) as bigint) as ALL0400_PRI
+    , try_cast(coalesce(di.UW_REQUEST:application:applicantsList[1]:creditPull:attributes:ALL0400:value::string, di.UW_REQUEST:application:applicantsList[1]:creditPull:attributes:ALL0400:originalValue::string) as bigint) as ALL0400_COS
+     from (
+     select af.ID,af2.COBORROWER_INDICATOR from DWMART.APPLICATIONS_FILE af
+     left join TDM_RISK_MGMT_HUB.MODELED.APPLICATIONS_FILE af2 on AF.ID = Af2.id
+     where af.APPLICATION_TYPE in ('PL')
+     --and DATE_START >= '2020-05-01'
+     and af.id<>0
+     --and af.ID in (12339914,12337709,12341974,12338282,12338847,12340707,15690595,20827658)
+     ) af
+    left join TDM_UNDERWRITING.CLEANSED.DIODES di on af.ID = di.TARGET_ID and di.TARGET_TYPE = 'APP'
+    where 1=1--af.APPLICATION_TYPE in ('PL')
+--    and af.DATE_START >= '2020-05-01' and af.DATE_START < '2022-12-01'
+      and di.RESULT_TYPE = 'OFFICIAL'
+      and ((af.COBORROWER_INDICATOR = 'N' and app_type = 'Single') or (af.COBORROWER_INDICATOR = 'Y' and app_type = 'Joint'))
+  qualify row_number() over (partition by af.ID order by di.DATE_OF_UNDERWRITING) = 1
+    ) b
+where a.id=b.id;
+
+select count(*),count(open_trades) from  TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis
+>
+select case
+    when PL_FUNDS_USE in ('Credit card payoff','Pay off credit cards') then 'CC payoff'
+    when PL_FUNDS_USE in ('Loan consolidation') then 'Loan consolidation'
+    when PL_FUNDS_USE in ('Major purchase','Make another major purchase') then 'Major purchase'
+    when PL_FUNDS_USE in ('Home improvement','Fund home improvements') then 'Home improvement'
+    else 'Others' end as loan_purpose, avg(case
+    when COBORROWER_IND=0 and TOTAL_BALANCE_OPEN_BC_TRADES<999999990 then TOTAL_BALANCE_OPEN_BC_TRADES
+    when COBORROWER_IND=0 then null
+    when TOTAL_BALANCE_OPEN_BC_TRADES_PRI>=999999990 then TOTAL_BALANCE_OPEN_BC_TRADES_COS
+    when TOTAL_BALANCE_OPEN_BC_TRADES_COS>=999999990 then TOTAL_BALANCE_OPEN_BC_TRADES_PRI
+else greatest(coalesce(TOTAL_BALANCE_OPEN_BC_TRADES_PRI,0),coalesce(TOTAL_BALANCE_OPEN_BC_TRADES_COS,0))
+end) as cc_balance,avg(open_trades)
+from TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis
+where fraud_atk=0 and CONFIRMED_FRAUD=0 and product<>'Pagaya'
+and (substring(orig_mon,1,4) in ('2021') or orig_mon in ('2022-01','2022-02'))
+and COBORROWER_IND=0
+group by 1
+order by 3 desc
+
+select DIRECT_PAY_IND, avg(case
+    when COBORROWER_IND=0 and TOTAL_BALANCE_OPEN_BC_TRADES<999999990 then TOTAL_BALANCE_OPEN_BC_TRADES
+    when COBORROWER_IND=0 then null
+    when TOTAL_BALANCE_OPEN_BC_TRADES_PRI>=999999990 then TOTAL_BALANCE_OPEN_BC_TRADES_COS
+    when TOTAL_BALANCE_OPEN_BC_TRADES_COS>=999999990 then TOTAL_BALANCE_OPEN_BC_TRADES_PRI
+else greatest(coalesce(TOTAL_BALANCE_OPEN_BC_TRADES_PRI,0),coalesce(TOTAL_BALANCE_OPEN_BC_TRADES_COS,0))
+end) as cc_balance,median(FICO_SCORE),median(gen3_score),median(ORIG_GROSS_INT_RATE),median(tier),median(orig_prin),avg(INITIAL_TERM),median(INITIAL_TERM),median(open_trades),
+       round((sum(yr1_co_dol)/sum(orig_prin))*100,2)
+from TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis
+where fraud_atk=0 and CONFIRMED_FRAUD=0 and product<>'Pagaya'
+and (substring(orig_mon,1,4) in ('2021') or orig_mon in ('2022-01','2022-02'))
+and COBORROWER_IND=0
+and PL_FUNDS_USE in ('Credit card payoff','Pay off credit cards')
+group by 1
+order by 1
+
+select min(ORIG_GROSS_INT_RATE),avg(ORIG_GROSS_INT_RATE),max(ORIG_GROSS_INT_RATE),median(ORIG_GROSS_INT_RATE)
+from TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis
+where fraud_atk=0 and CONFIRMED_FRAUD=0 and product<>'Pagaya'
+and (substring(orig_mon,1,4) in ('2021') or orig_mon in ('2022-01','2022-02'))
+and COBORROWER_IND=0
+and PL_FUNDS_USE in ('Credit card payoff','Pay off credit cards')
+
+select ORIG_GROSS_INT_RATE, round(cast(ORIG_GROSS_INT_RATE as float)*100,0)
+from TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis
+where
+
+select round(cast(ORIG_GROSS_INT_RATE as float)*100,0),
+       round((sum(yr1_co_dol)/sum(orig_prin))*100,2)
+from TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis
+where fraud_atk=0 and CONFIRMED_FRAUD=0 and product<>'Pagaya'
+and (substring(orig_mon,1,4) in ('2021') or orig_mon in ('2022-01','2022-02'))
+and COBORROWER_IND=0
+and PL_FUNDS_USE in ('Credit card payoff','Pay off credit cards')
+group by 1
+order by 1
+
+-- Gen 3
+
+alter table TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis add
+    gen3_score_pri int,gen3_score_cos int;
+
+/*
+update TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis set
+gen3_pri=null,
+gen3_cos=null;
+*/
+
+update TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis as a
+set  a.gen3_score_pri=b.gen3_score_pri
+    ,a.gen3_score_cos=b.gen3_score_cos
+from (
+    select af.ID
+    , di.UW_RESULT:applicationDecisionInfo:applicationType::string as app_type
+            , try_cast(di.UW_REQUEST:application:applicantsList[0]:gen3Score::string as int) as gen3_score_pri
+        , try_cast(di.UW_REQUEST:application:applicantsList[1]:gen3Score::string as int) as gen3_score_cos
+     from (
+     select af.ID,af2.COBORROWER_INDICATOR from DWMART.APPLICATIONS_FILE af
+     left join TDM_RISK_MGMT_HUB.MODELED.APPLICATIONS_FILE af2 on AF.ID = Af2.id
+     where af.APPLICATION_TYPE in ('PL')
+     --and DATE_START >= '2020-05-01'
+     and af.id<>0
+     --and af.ID in (12339914,12337709,12341974,12338282,12338847,12340707,15690595,20827658)
+     ) af
+    left join TDM_UNDERWRITING.CLEANSED.DIODES di on af.ID = di.TARGET_ID and di.TARGET_TYPE = 'APP'
+    where 1=1--af.APPLICATION_TYPE in ('PL')
+--    and af.DATE_START >= '2020-05-01' and af.DATE_START < '2022-12-01'
+      and di.RESULT_TYPE = 'OFFICIAL'
+      and ((af.COBORROWER_INDICATOR = 'N' and app_type = 'Single') or (af.COBORROWER_INDICATOR = 'Y' and app_type = 'Joint'))
+  qualify row_number() over (partition by af.ID order by di.DATE_OF_UNDERWRITING) = 1
+    ) b
+where a.id=b.id;
+
+select gen3_score_pri,gen3_score_cos,coalesce((gen3_score_pri+gen3_score_cos)/2,gen3_score_pri,gen3_score_cos) from TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis
+where gen3_score_pri is not null or gen3_score_cos is not null
+
+select min(gen3_score_pri),avg(gen3_score_pri),max(gen3_score_pri) from (
+select gen3_score_pri,gen3_score_cos,coalesce((gen3_score_pri+gen3_score_cos)/2,gen3_score_pri,gen3_score_cos) as gen3_score from TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis
+
+select min(gen3_score),avg(gen3_score),max(gen3_score) from (
+select gen3_score_pri,gen3_score_cos,coalesce((gen3_score_pri+gen3_score_cos)/2,gen3_score_pri,gen3_score_cos) as gen3_score from TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis
+)
+
+select count(*),sum(iff(COBORROWER_INDICATOR='Y',1,0)),count(gen3_score_cos)
+from TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis
+
+select gen3_score_pri,gen3_score_cos
+from TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis
+where gen3_score_cos<0
+
+update TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis set gen3_score_cos=null
+where gen3_score_cos<0
+
+alter table TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis add gen3_score float;
+--update TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis set gen3_score=null;
+update TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis set gen3_score=coalesce((gen3_score_pri+gen3_score_cos)/2,gen3_score_pri,gen3_score_cos);
+
+select count(*),
+       percentile_cont(0.85) within group (order by gen3_score) as p15
+from TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis
+where CONFIRMED_FRAUD=0 and fraud_atk=0
+and product<>'Pagaya'
+and orig_mon is not null
+and substring(orig_mon,1,7) in ('2022-01','2022-02')
+and COBORROWER_IND=0
+and PL_FUNDS_USE in ('Credit card payoff','Pay off credit cards')
+
+select case when gen3_score is null then '3 No Gen3 score' when gen3_score>795 then '1 Top 15%' else '2 Bottom 85%' end as gen3_score
+    ,direct_pay_ind
+    ,count(*) as pl
+    ,sum(coalesce(orig_prin,0)) as loan_amt
+    ,sum(coalesce(YR1_CO_DOL,0)) as YR1_CO_PRIN
+from TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis
+where CONFIRMED_FRAUD=0 and fraud_atk=0
+and product<>'Pagaya'
+and orig_mon is not null
+and substring(orig_mon,1,7) in ('2022-01','2022-02')
+and COBORROWER_IND=0
+and PL_FUNDS_USE in ('Credit card payoff','Pay off credit cards')
+group by 1,2
+order by 1,2
+
+select count(*),
+       percentile_cont(0.85) within group (order by gen3_score) as p15
+from TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis
+where CONFIRMED_FRAUD=0 and fraud_atk=0
+and product<>'Pagaya'
+and orig_mon is not null
+and substring(orig_mon,1,7) in ('2022-01','2022-02')
+and COBORROWER_IND=0
+and PL_FUNDS_USE not in ('Credit card payoff','Pay off credit cards')
+
+select case when gen3_score is null then '3 No Gen3 score' when gen3_score>801 then '1 Top 15%' else '2 Bottom 85%' end as gen3_score
+    --,direct_pay_ind
+    ,count(*) as pl
+    ,sum(coalesce(orig_prin,0)) as loan_amt
+    ,sum(coalesce(YR1_CO_DOL,0)) as YR1_CO_PRIN
+    ,sum(coalesce(YR1_CO_DOL,0))/sum(coalesce(orig_prin,0)) as CO_rate
+from TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis
+where CONFIRMED_FRAUD=0 and fraud_atk=0
+and product<>'Pagaya'
+and orig_mon is not null
+and substring(orig_mon,1,7) in ('2022-01','2022-02')
+and COBORROWER_IND=0
+and PL_FUNDS_USE not in ('Credit card payoff','Pay off credit cards')
+group by 1
+order by 1
+
+select PL_FUNDS_USE, avg(gen3_score)
+from TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis
+where fraud_atk=0 and CONFIRMED_FRAUD=0 and product<>'Pagaya'
+and orig_mon in ('2023-01','2023-02')
+and substring(orig_mon,1,4) in ('2022','2023')
+group by 1
+order by 2 desc
+
+/*
+select count(*) from TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis
+where coborrower_ind=1 and direct_pay_ind=1
+
+show columns in table DWMART.APPLICATIONS_FILE
+
+select * from DWMART.LOANS_BLENDED_DAILY limit 10
+
+SELECT TABLE_SCHEMA, table_name, column_name, data_type, CHARACTER_MAXIMUM_LENGTH FROM INFORMATION_SCHEMA.COLUMNS
+where lower(COLUMN_NAME) like '%term%' and lower(COLUMN_NAME) like '%pay%'
+
+SELECT TABLE_SCHEMA, table_name, column_name, data_type, CHARACTER_MAXIMUM_LENGTH FROM INFORMATION_SCHEMA.COLUMNS
+where COLUMN_NAME='FUNDED_APP'
+
+SELECT * FROM INFORMATION_SCHEMA.tables
+where lower(TABLE_NAME) like '%diode%'
+
+select PL_FUNDS_USE,count(*)
+from SOFIDW.APPLICATIONS
+group by 1
+
+*/
+
+/* ----------------------------------------------------------------------------------------------------------------
+   ----------------------------------------------------------------------------------------------------------------
+   ----------------------------------------------------------------------------------------------------------------
+                                            Applications funnel
+   ----------------------------------------------------------------------------------------------------------------
+   ----------------------------------------------------------------------------------------------------------------
+   ----------------------------------------------------------------------------------------------------------------
+ */
+
+-- Used to estimate lift in originations after Direct Pay deployment, at the end it wasn't used because Product team shared with us an estimate of 2% lift.
+-- Pasted on DP_estimation Excel files
+drop table if exists TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis_apps;
+create table TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis_apps as
+    select
+         AF.DW_APPLICATION_ID,AF.ID, lbd.loan_id,lbd.APPLICANT_ID,lbd.CURRENT_OWNER_NAME, lbd.ORIG_GROSS_INT_RATE, lbd.tier,af2.COBORROWER_INDICATOR,
+           case
+               when lbd.tier between 1 and 8 then 'Main'
+               when lbd.tier between 31 and 34 then 'Prime'
+               else 'Pagaya' end as Product,
+           af.PL_FUNDS_USE, lbd.CONFIRMED_FRAUD,  case when b.uid = af.applicant_id then 1 else 0 end as fraud_atk,
+           IFF(AP.DIRECT_PAY_DEBT_TOTAL > 0, 1, 0) as DIRECT_PAY_IND, lbd.FICO_SCORE
+        , case when lbd.FICO_SCORE < 300 or lbd.FICO_SCORE > 850 then '01. Invalid'
+               when lbd.FICO_SCORE is null then '02. Missing'
+               when lbd.FICO_SCORE < 680 then '03. 300-679'
+               when lbd.FICO_SCORE < 700 then '04. 680-699'
+               when lbd.FICO_SCORE < 740 then '05. 700-739'
+               when lbd.FICO_SCORE < 780 then '06. 740-779'
+               else '07. 780-850' end as fico_band
+         ,af.date_start
+         , substr(af.date_start,1,7) as orig_app
+         ,af.initial_decision
+         ,af.DATE_SUBMIT,
+        af.DATE_DOC_UPLOAD
+        , substr(lbd.ORIGINATION_DATE,1,7) as orig_mon
+        ,lbd.ORIGINAL_PRIN as orig_prin
+        ,case when lbm2.DAYS_PAST_DUE >= 30 then 1
+                   when lbm2.LOAN_STATUS in ('CHARGE OFF','CHARGE OFF PIF','CHARGE OFF COMPLETE','WRITE OFF') then 1
+                   else 0 end as mob3_dpd30p_co_ind
+        ,case when lbm2.DAYS_PAST_DUE >= 30 then lbm2.CURRENT_PRIN
+                   when lbm2.LOAN_STATUS in ('CHARGE OFF','CHARGE OFF PIF','CHARGE OFF COMPLETE','WRITE OFF') then -lbd.CHARGE_OFF_PRIN
+                   else 0 end as mob3_dpd30p_co_prin
+        ,case when lbm.DAYS_PAST_DUE >= 60 then 1
+                   when lbm.LOAN_STATUS in ('CHARGE OFF','CHARGE OFF PIF','CHARGE OFF COMPLETE','WRITE OFF') then 1
+                   else 0 end as mob6_dpd60p_co_ind
+        ,case when lbm.DAYS_PAST_DUE >= 60 then lbm.CURRENT_PRIN
+                   when lbm.LOAN_STATUS in ('CHARGE OFF','CHARGE OFF PIF','CHARGE OFF COMPLETE','WRITE OFF') then -lbd.CHARGE_OFF_PRIN
+                   else 0 end as mob6_dpd60p_co_prin
+        ,case when lbm5.LOAN_STATUS in ('CHARGE OFF','CHARGE OFF PIF','CHARGE OFF COMPLETE','WRITE OFF') then -lbd.CHARGE_OFF_PRIN
+                   else 0 end as yr1_co_dol
+        ,case when lbm5.LOAN_STATUS in ('CHARGE OFF','CHARGE OFF PIF','CHARGE OFF COMPLETE','WRITE OFF') then 1
+                   else 0 end as yr1_co_unit
+
+      from DWMART.APPLICATIONS_FILE af
+LEFT JOIN DWMART.LOANS_BLENDED_DAILY lbd on lbd.ID = AF.ID
+left join DWMART.LOANS_BLENDED_MONTHLY lbm on lbd.LOAN_ID = lbm.LOAN_ID and lbm.SEASONING_ORIG = 6
+left join DWMART.LOANS_BLENDED_MONTHLY lbm2 on lbd.LOAN_ID = lbm2.LOAN_ID and lbm2.SEASONING_ORIG = 3
+left join DWMART.LOANS_BLENDED_MONTHLY lbm5 on lbd.LOAN_ID = lbm5.LOAN_ID and lbm5.SEASONING_ORIG = 12
+left join tdm_sandbox.sandbox.plmb_fraud_uid_list as b on af.applicant_id = b.uid
+LEFT JOIN TDM_RISK_MGMT_HUB.MODELED.APPLICATIONS AP on AF.ID = AP.BUSINESS_APPLICATION_ID
+left join TDM_RISK_MGMT_HUB.MODELED.APPLICATIONS_FILE af2 on AF.ID = Af2.id
+    where af.APPLICATION_TYPE in ('PL')
+      and af.DATE_START between '2020-01-01' and '2023-02-28'
+      and AF.ID <> 0;
+
+select * from TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis_apps limit 10
+
+select APPLICATION_TYPE,count(*) from DWMART.APPLICATIONS_FILE group by 1 order by 1
+select DATE_SUBMIT,DATE_DOC_UPLOAD from DWMART.APPLICATIONS_FILE limit 10
+
+select orig_app,case
+    when PL_FUNDS_USE in ('Credit card payoff','Pay off credit cards') then 'CC payoff'
+    when PL_FUNDS_USE in ('Loan consolidation') then 'Loan consolidation'
+    when PL_FUNDS_USE in ('Major purchase','Make another major purchase') then 'Major purchase'
+    when PL_FUNDS_USE in ('Home improvement','Fund home improvements') then 'Home improvement'
+    else 'Others' end as loan_purpose
+,iff(initial_decision in ('ACCEPT'),1,0) as QS_d
+,iff(initial_decision in ('ACCEPT') and DATE_SUBMIT is not null,1,0) as S_d
+,iff(initial_decision in ('ACCEPT') and DATE_SUBMIT is not null and DATE_DOC_UPLOAD is not null,1,0) as DU_d
+,iff(initial_decision in ('ACCEPT') and DATE_SUBMIT is not null and DATE_DOC_UPLOAD is not null and orig_mon is not null,1,0) as FD_d
+,iff(COBORROWER_INDICATOR='Y',1,0) as COBORROWER_IND,DIRECT_PAY_ind
+,count(*) as apps
+,sum(iff(initial_decision in ('ACCEPT'),1,0)) as QS_m
+,sum(iff(initial_decision in ('ACCEPT') and DATE_SUBMIT is not null,1,0)) as S_m
+,sum(iff(initial_decision in ('ACCEPT') and DATE_SUBMIT is not null and DATE_DOC_UPLOAD is not null,1,0)) as DU_m
+,sum(iff(initial_decision in ('ACCEPT') and DATE_SUBMIT is not null and DATE_DOC_UPLOAD is not null and orig_mon is not null,1,0)) as FD_m
+,sum(coalesce(ORIG_PRIN,0)) as ORIG_PRIN,sum(DIRECT_PAY_IND) as direct_pay_loans
+from TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis_apps
+--where initial_decision in ('ACCEPT')
+--and date_start between '2023-01-12' and '2023-01-18'
+group by 1,2,3,4,5,6,7,8;
+
+select PL_FUNDS_USE,count(*)
+from TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis_apps
+group by 1
+order by 1
+select * from TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis_apps
+
+select count(*)
+from TDM_SANDBOX.SANDBOX.asd_2303_dpay_analysis_apps
+where date_start between '2023-01-16' and '2023-01-22'
+--and initial_decision in ('ACCEPT')
+--and DATE_SUBMIT is not null
+--and DATE_DOC_UPLOAD is not null
+and orig_mon is not null
