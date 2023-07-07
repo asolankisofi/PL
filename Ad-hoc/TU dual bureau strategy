@@ -1,0 +1,2014 @@
+-- We want to analyze the Experian and Transunion variables in order to validate the current TU strategy (for Experian declines) and explore the possibility of integrating the strategy for Experian no hits.
+-- March 2023
+/* ----------------------------------------------------------------------------------------------------------------
+   ----------------------------------------------------------------------------------------------------------------
+   ----------------------------------------------------------------------------------------------------------------
+                                                Info
+   ----------------------------------------------------------------------------------------------------------------
+   ----------------------------------------------------------------------------------------------------------------
+   ----------------------------------------------------------------------------------------------------------------
+ */
+-- Get all apps from Dec 2023 to Mid May 2023
+create or replace table TDM_SANDBOX.SANDBOX.asd_2303_tu_analysis_0 as
+select af.id
+     , di.target_id
+     , di.UW_REQUEST_UUID
+     , di.UW_RESULT_UUID
+     , di.DATE_OF_UNDERWRITING
+     , di.UW_RESULT:applicationDecisionInfo:applicationType::string                                                                  as app_type
+     , di.UW_REQUEST:creditBureauStrategy::string                                                                                    as creditBureauStrategy
+     , di.UW_RESULT:applicationDecisionInfo:decision::string                                                                         as di_decision
+     , di.UW_REQUEST:reconsider:eligibility[0]: name::string                                                                         as tu_reconsider_flag_request
+     , di.UW_REQUEST:reconsider:carryForward::string                                                                                 as tu_reconsider_flag_request_carryforward
+     , di.UW_RESULT:reconsider:eligibility[0]: name::string                                                                          as tu_reconsider_flag_result
+     , di.UW_RESULT:reconsider:carryForward::string                                                                                  as tu_reconsider_flag_result_carryforward
+     , di.UW_REQUEST:application:applicantsList[0]:creditPull:tuCreditScoreModel:results::float                                      as TU_FICO
+     , di.UW_REQUEST:application:applicantsList[0]:creditPull:creditScores[0].score::float                                           as Exp_FICO
+     , di.UW_REQUEST:application:applicantsList[0]:machineLearningModelResponses:"TU-PL-Gen3-Model":score::float                     as TU_Gen3
+     , di.UW_REQUEST:application:applicantsList[0]:gen3Score::float                                                                  as Exp_Gen3
+     , di.UW_REQUEST:application:applicantsList[1]:creditPull:tuCreditScoreModel:results::float                                      as TU_FICO_cob
+     , di.UW_REQUEST:application:applicantsList[1]:creditPull:creditScores[0].score::float                                           as Exp_FICO_cob
+     , di.UW_REQUEST:application:applicantsList[1]:machineLearningModelResponses:"TU-PL-Gen3-Model":score::float                     as TU_Gen3_cob
+     , di.UW_REQUEST:application:applicantsList[1]:gen3Score::float                                                                  as Exp_Gen3_cob
+     , di.UW_RESULT:applicationDecisionInfo:fcfv2::float                                                                             as FCF
+     , try_cast(di.UW_RESULT:applicationDecisionInfo.projectedUbti::string as float)                                                 as UBTI
+
+     , UW_REQUEST:application:applicantsList[0]:creditPulls:TRANSUNION:creditScores:"00Q88".score::float                             as TU_FICO_SCORE_real
+     , UW_REQUEST:application:applicantsList[1]:creditPulls:TRANSUNION:creditScores:"00Q88".score::float                             as TU_FICO_SCORE_real_cob
+
+     , UW_REQUEST:application:applicantsList[0]:creditPulls:TRANSUNION:attributes:"00WR3_G232S":value::int                           as TU_IQT9420_real
+     , UW_REQUEST:application:applicantsList[1]:creditPulls:TRANSUNION:attributes:"00WR3_G232S":value::int                           as TU_IQT9420_real_cob
+     , UW_REQUEST:application:applicantsList[0]:creditPulls:TRANSUNION:attributes:"00WR3_AT12S":value::int                           as TU_ALL0416_real
+     , UW_REQUEST:application:applicantsList[1]:creditPulls:TRANSUNION:attributes:"00WR3_AT12S":value::int                           as TU_ALL0416_real_cob
+
+     , try_cast(coalesce(di.UW_REQUEST:application:applicantsList[0]:creditPull:attributes:COL5060: value::string,
+                         di.UW_REQUEST:application:applicantsList[0]:creditPull:attributes:COL5060:originalValue::string) as bigint) as COL5060--0-999999990
+     , try_cast(coalesce(di.UW_REQUEST:application:applicantsList[0]:creditPull:attributes:ALL5301: value::string,
+                         di.UW_REQUEST:application:applicantsList[0]:creditPull:attributes:ALL5301:originalValue::string) as bigint) as ALL5301--0-999999990
+     , try_cast(coalesce(di.UW_REQUEST:application:applicantsList[0]:creditPull:attributes:ALL2840: value::string,
+                         di.UW_REQUEST:application:applicantsList[0]:creditPull:attributes:ALL2840:originalValue::string) as bigint) as ALL2840--0-90
+     , try_cast(coalesce(di.UW_REQUEST:application:applicantsList[0]:creditPull:attributes:ALL0416: value::string,
+                         di.UW_REQUEST:application:applicantsList[0]:creditPull:attributes:ALL0416:originalValue::string) as bigint) as ALL0416--0-90
+     , try_cast(coalesce(di.UW_REQUEST:application:applicantsList[0]:creditPull:attributes:ALL9220: value::string,
+                         di.UW_REQUEST:application:applicantsList[0]:creditPull:attributes:ALL9220:originalValue::string) as bigint) as ALL9220--0-9990
+     , try_cast(coalesce(di.UW_REQUEST:application:applicantsList[0]:creditPull:attributes:ALL2830: value::string,
+                         di.UW_REQUEST:application:applicantsList[0]:creditPull:attributes:ALL2830:originalValue::string) as bigint) as ALL2830--0-90
+     , try_cast(coalesce(di.UW_REQUEST:application:applicantsList[0]:creditPull:attributes:IQT9420: value::string,
+                         di.UW_REQUEST:application:applicantsList[0]:creditPull:attributes:IQT9420:originalValue::string) as bigint) as IQT9420--0-90
+     , try_cast(coalesce(di.UW_REQUEST:application:applicantsList[0]:creditPull:attributes:SOFIINQ: value::string,
+                         di.UW_REQUEST:application:applicantsList[0]:creditPull:attributes:SOFIINQ:originalValue::string) as bigint) as SOFIINQ
+
+     , try_cast(coalesce(di.UW_REQUEST:application:applicantsList[1]:creditPull:attributes:COL5060: value::string,
+                         di.UW_REQUEST:application:applicantsList[1]:creditPull:attributes:COL5060:originalValue::string) as bigint) as COL5060_cob
+     , try_cast(coalesce(di.UW_REQUEST:application:applicantsList[1]:creditPull:attributes:ALL5301: value::string,
+                         di.UW_REQUEST:application:applicantsList[1]:creditPull:attributes:ALL5301:originalValue::string) as bigint) as ALL5301_cob
+     , try_cast(coalesce(di.UW_REQUEST:application:applicantsList[1]:creditPull:attributes:ALL2840: value::string,
+                         di.UW_REQUEST:application:applicantsList[1]:creditPull:attributes:ALL2840:originalValue::string) as bigint) as ALL2840_cob
+     , try_cast(coalesce(di.UW_REQUEST:application:applicantsList[1]:creditPull:attributes:ALL0416: value::string,
+                         di.UW_REQUEST:application:applicantsList[1]:creditPull:attributes:ALL0416:originalValue::string) as bigint) as ALL0416_cob
+     , try_cast(coalesce(di.UW_REQUEST:application:applicantsList[1]:creditPull:attributes:ALL9220: value::string,
+                         di.UW_REQUEST:application:applicantsList[1]:creditPull:attributes:ALL9220:originalValue::string) as bigint) as ALL9220_cob
+     , try_cast(coalesce(di.UW_REQUEST:application:applicantsList[1]:creditPull:attributes:ALL2830: value::string,
+                         di.UW_REQUEST:application:applicantsList[1]:creditPull:attributes:ALL2830:originalValue::string) as bigint) as ALL2830_cob
+     , try_cast(coalesce(di.UW_REQUEST:application:applicantsList[1]:creditPull:attributes:IQT9420: value::string,
+                         di.UW_REQUEST:application:applicantsList[1]:creditPull:attributes:IQT9420:originalValue::string) as bigint) as IQT9420_cob
+     , try_cast(coalesce(di.UW_REQUEST:application:applicantsList[1]:creditPull:attributes:SOFIINQ: value::string,
+                         di.UW_REQUEST:application:applicantsList[1]:creditPull:attributes:SOFIINQ:originalValue::string) as bigint) as SOFIINQ_cob
+
+from TDM_RISK_MGMT_HUB.MODELED.APPLICATIONS_FILE af
+         left join TDM_UNDERWRITING.CLEANSED.DIODES_OFFICIAL di
+                   on af.ID = di.TARGET_ID and
+                      di.TARGET_TYPE = 'APP' and
+                      di.product_name = 'PL' and
+                      di.UW_RESULT:uwModel::string = 'PLGen3'
+where af.application_type = 'PL'
+  and af.date_start between '2022-12-01' and '2023-05-15';
+
+--2195810,505384
+--3091831,705982
+select count(*) as total, count(*) - count(distinct id) as dup
+from TDM_SANDBOX.SANDBOX.asd_2303_tu_analysis_0;
+
+-- Get the latest model run
+create or replace table TDM_SANDBOX.SANDBOX.asd_2303_tu_analysis_all as
+select *
+from (select *
+      from TDM_SANDBOX.SANDBOX.asd_2303_tu_analysis_0)
+    qualify row_number() over (partition by target_id order by DATE_OF_UNDERWRITING desc) = 1;
+
+--1636645,0
+--2308906,0
+select count(*) as total, count(*) - count(distinct id) as dup
+from TDM_SANDBOX.SANDBOX.asd_2303_tu_analysis_all;
+
+-- Get the latest TU model run
+create or replace table TDM_SANDBOX.SANDBOX.asd_2303_tu_analysis_TU as
+select *
+from (select *
+      from TDM_SANDBOX.SANDBOX.asd_2303_tu_analysis_0
+      where creditBureauStrategy = 'EXP_WITH_TU_FULL')
+    qualify row_number() over (partition by target_id order by DATE_OF_UNDERWRITING desc) = 1;
+
+--35812,0
+--42019,0
+select count(*) as total, count(*) - count(distinct id) as dup
+from TDM_SANDBOX.SANDBOX.asd_2303_tu_analysis_tu;
+
+-- Get the latest Experian model run
+create or replace table TDM_SANDBOX.SANDBOX.asd_2303_tu_analysis_EXP as
+select *
+from (select *
+      from TDM_SANDBOX.SANDBOX.asd_2303_tu_analysis_0
+      where creditBureauStrategy IN ('EXPERIAN', 'EXP_WITH_TU_MODEL'))
+    qualify row_number() over (partition by target_id order by DATE_OF_UNDERWRITING desc) = 1;
+
+--1636644,0
+--2308905,0
+select count(*) as total, count(*) - count(distinct id) as dup
+from TDM_SANDBOX.SANDBOX.asd_2303_tu_analysis_exp;
+
+--Get knockout rules for PL from
+--https://tableau-prod.sofi.com/#/views/PLGen3CreditDeclineReason/BreakdownbyDeclineReasons?:iid=1
+
+create or replace table TDM_SANDBOX.SANDBOX.asd_2303_tu_analysis_rules as
+select a.ID                                       as app_id
+     , di.UW_REQUEST_UUID
+     , di.UW_RESULT_UUID
+     , di.DATE_OF_UNDERWRITING
+     , di.UW_REQUEST:creditBureauStrategy::string as creditBureauStrategy
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'ineligiblecitizenship%' then 1
+               else 0 end)                        as IneligibleCitizenship_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'unabletoverifyidentity%' then 1
+               else 0 end)                        as UnableToVerifyIdentity_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'invalidaddress%' then 1
+               else 0 end)                        as InvalidAddress_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'ineligibleage%' then 1
+               else 0 end)                        as IneligibleAge_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'ineligiblestate%' then 1
+               else 0 end)                        as IneligibleState_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'delinquentonpriorloan%' then 1
+               else 0 end)                        as DelinquentOnPriorLoan_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'insufficientpaymenthistoryonexistingloan%' then 1
+               else 0 end)                        as InsufficientPaymentHistoryOnExistingLoan_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like '90daywaitingperiod%' then 1
+               else 0 end)                        as _90DayWaitingPeriod_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'toomanyactiveloans%' then 1
+               else 0 end)                        as TooManyActiveLoans_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'bureaunothit%' then 1
+               else 0 end)                        as BureauNotHit_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'missingfico%' then 1
+               else 0 end)                        as MissingFICO_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'lowfico%' then 1
+               else 0 end)                        as LowFICO_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'largecollectionbalance%' then 1
+               else 0 end)                        as LargeCollectionBalance_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'largechargeoffamount%' then 1
+               else 0 end)                        as LargeChargeoffAmount_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'toomanychargeofftrades%' then 1
+               else 0 end)                        as TooManyChargeoffTrades_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'toofewtrades%' then 1
+               else 0 end)                        as TooFewTrades_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'bankruptcyin5yrs%' then 1
+               else 0 end)                        as BankruptcyIn5Yrs_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'repossession%' then 1
+               else 0 end)                        as Repossession_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'toomanycreditinquiries%' then 1
+               else 0 end)                        as TooManyCreditInquiries_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'toomanyunsecuredinquires%' then 1
+               else 0 end)                        as TooManyUnsecuredInquires_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'insufficientfcf%' then 1
+               else 0 end)                        as InsufficientFCF_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node1_gen3%' then 1
+               else 0 end)                        as Node1_Gen3_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node4_gen3_ubti_rta7300%' then 1
+               else 0 end)                        as Node4_Gen3_UBTI_RTA7300_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node5_gen3_ubti_rta7300%' then 1
+               else 0 end)                        as Node5_Gen3_UBTI_RTA7300_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node6_gen3_ubti%' then 1
+               else 0 end)                        as Node6_Gen3_UBTI_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node10_gen3_ubti%' then 1
+               else 0 end)                        as Node10_Gen3_UBTI_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node11_gen3_ubti%' then 1
+               else 0 end)                        as Node11_Gen3_UBTI_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node13_gen3_ubti%' then 1
+               else 0 end)                        as Node13_Gen3_UBTI_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node14_gen3_ubti%' then 1
+               else 0 end)                        as Node14_Gen3_UBTI_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node17_gen3_ubti_tbca2201%' then 1
+               else 0 end)                        as Node17_Gen3_UBTI_TBCA2201_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node18_gen3_ubti_tbca2201%' then 1
+               else 0 end)                        as Node18_Gen3_UBTI_TBCA2201_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node19_gen3_ubti_tbca2201%' then 1
+               else 0 end)                        as Node19_Gen3_UBTI_TBCA2201_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node23_gen3_ubti_iln5930%' then 1
+               else 0 end)                        as Node23_Gen3_UBTI_ILN5930_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node24_gen3_ubti_iln5930%' then 1
+               else 0 end)                        as Node24_Gen3_UBTI_ILN5930_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node30_gen3_ubti_atp_tbcc1203%' then 1
+               else 0 end)                        as Node30_Gen3_UBTI_ATP_TBCC1203_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node31_gen3_ubti_atp_tbcc1203%' then 1
+               else 0 end)                        as Node31_Gen3_UBTI_ATP_TBCC1203_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node33_gen3_ubti_atp_tbcc4206%' then 1
+               else 0 end)                        as Node33_Gen3_UBTI_ATP_TBCC4206_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node34_gen3_ubti_atp_tbcc4206%' then 1
+               else 0 end)                        as Node34_Gen3_UBTI_ATP_TBCC4206_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node44_gen3_ubti_all5825%' then 1
+               else 0 end)                        as Node44_Gen3_UBTI_ALL5825_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node1002_gen3_ubti%' then 1
+               else 0 end)                        as Node1002_Gen3_UBTI_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node1003_gen3_ubti%' then 1
+               else 0 end)                        as Node1003_Gen3_UBTI_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node1006_gen3_ubti_atp%' then 1
+               else 0 end)                        as Node1006_Gen3_UBTI_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node1007_gen3_ubti_atp%' then 1
+               else 0 end)                        as Node1007_Gen3_UBTI_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node1009_gen3_ubti_atp%' then 1
+               else 0 end)                        as Node1009_Gen3_UBTI_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node1010_gen3_ubti_atp%' then 1
+               else 0 end)                        as Node1010_Gen3_UBTI_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node1014_gen3_ubti_als5400%' then 1
+               else 0 end)                        as Node1014_Gen3_UBTI_ALS5400_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node1015_gen3_ubti_als5400%' then 1
+               else 0 end)                        as Node1015_Gen3_UBTI_ALS5400_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node1016_gen3_ubti_als5400%' then 1
+               else 0 end)                        as Node1016_Gen3_UBTI_ALS5400_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node1021_gen3_ubti_atp_tbcc2203%' then 1
+               else 0 end)                        as Node1021_Gen3_UBTI_ATP_TBCC2203_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node1022_gen3_ubti_atp_tbcc2203%' then 1
+               else 0 end)                        as Node1022_Gen3_UBTI_ATP_TBCC2203_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node1023_gen3_ubti_atp%' then 1
+               else 0 end)                        as Node1023_Gen3_UBTI_ATP_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node1028_gen3_ubti_all5320%' then 1
+               else 0 end)                        as Node1028_Gen3_UBTI_ALL5320_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node1034_gen3_ubti_tbca3279_tbcc3261%' then 1
+               else 0 end)                        as Node1034_Gen3_UBTI_TBCA3279_TBCC3261_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node1035_gen3_ubti_tbca329_tbcc3261%' then 1
+               else 0 end)                        as Node1035_Gen3_UBTI_TBCA3279_TBCC3261_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node1036_gen3_ubti_tbca3279%' then 1
+               else 0 end)                        as Node1036_Gen3_UBTI_TBCA3279_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'bkscore_rti%' then 1
+               else 0 end)                        as BKscore_RTI_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'gen3_postloanubti%' then 1
+               else 0 end)                        as Gen3_PostLoanUBTI_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'lowmotr_rti_dtr%' then 1
+               else 0 end)                        as LowMOTR_RTI_DTR_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'everdelinquentonsofi%' then 1
+               else 0 end)                        as EverDelinquentOnSoFI_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'nooffersavailable%' then 1
+               else 0 end)                        as NoOffersAvailable_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'ineligibleofferduetostate%' then 1
+               else 0 end)                        as IneligibleOfferDueToState_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'ineligibleofferduetomaxofferamount%' then 1
+               else 0 end)                        as IneligibleOfferDueToMaxOfferAmount_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'deceasedapp%' then 1
+               else 0 end)                        as DeceasedApp_ind
+
+     , max(case
+               when lower(VALUE:decisionCode::string) like '1stpartyfraudrule01%' then 1
+               else 0 end)                        as FPFrule01_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like '1stpartyfraudrule02%' then 1
+               else 0 end)                        as FPFrule02_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like '1stpartyfraudrule03%' then 1
+               else 0 end)                        as FPFrule03_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like '1stpartyfraudrule04%' then 1
+               else 0 end)                        as FPFrule04_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like '1stpartyfraudrule05%' then 1
+               else 0 end)                        as FPFrule05_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like '1stpartyfraudrule06%' then 1
+               else 0 end)                        as FPFrule06_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like '1stpartyfraudrule07%' then 1
+               else 0 end)                        as FPFrule07_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like '1stpartyfraudrule08%' then 1
+               else 0 end)                        as FPFrule08_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like '1stpartyfraudrule09%' then 1
+               else 0 end)                        as FPFrule09_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like '1stpartyfraudrule10%' then 1
+               else 0 end)                        as FPFrule10_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like '1stpartyfraudrule11%' then 1
+               else 0 end)                        as FPFrule11_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'prime_1stpartyfraudrule01%' then 1
+               else 0 end)                        as PrimeFPFrule01_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'prime_1stpartyfraudrule02%' then 1
+               else 0 end)                        as PrimeFPFrule02_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'prime_1stpartyfraudrule03%' then 1
+               else 0 end)                        as PrimeFPFrule03_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like '%toomanycreditapprovals%' then 1
+               else 0 end)
+                                                  as OLNDecline_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like '1stpartyfraudprimerule10%' then 1
+               else 0 end)
+                                                  as FPFfraudprimerule10_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like '1stpartyfraudprimerule11%' then 1
+               else 0 end)
+                                                  as FPFfraudprimerule11_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like '1stpartyfraudprimerule12%' then 1
+               else 0 end)
+                                                  as FPFfraudprimerule12_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like '1stpartyfraudprimerule13%' then 1
+               else 0 end)
+                                                  as FPFfraudprimerule13_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like '1stpartyfraudprimerule14%' then 1
+               else 0 end)
+                                                  as FPFfraudprimerule14_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like '1stpartyfraudprimerule15%' then 1
+               else 0 end)
+                                                  as FPFfraudprimerule15_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like '1stpartyfraudprimerule16%' then 1
+               else 0 end)
+                                                  as FPFfraudprimerule16_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like '1stpartyfraudprimerule17%' then 1
+               else 0 end)
+                                                  as FPFfraudprimerule17_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like '1stpartyfraudprimerule18%' then 1
+               else 0 end)
+                                                  as FPFfraudprimerule18_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like '1stpartyfraudprimerule19%' then 1
+               else 0 end)
+                                                  as FPFfraudprimerule19_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like '1stpartyfraudprimerule20%' then 1
+               else 0 end)
+                                                  as FPFfraudprimerule20_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like '1stpartyfraudprimerule21%' then 1
+               else 0 end)
+                                                  as FPFfraudprimerule21_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like '1stpartyfraudprimerule22%' then 1
+               else 0 end)
+                                                  as FPFfraudprimerule22_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like '1stpartyfraudprimerule23%' then 1
+               else 0 end)
+                                                  as FPFfraudprimerule23_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like '1stpartyfraudrule12%' then 1
+               else 0 end)
+                                                  as FPFrule12_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like '1stpartyfraudrule13%' then 1
+               else 0 end)
+                                                  as FPFrule13_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like '1stpartyfraudrule14%' then 1
+               else 0 end)
+                                                  as FPFrule14_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like
+                    'no offers available as state rules restrict all valid offers' then 1
+               else 0 end)
+                                                  as no_offers_available_as_state_rules_restrict_all_valid_offers_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node10_gen3_plubti_rev253_rev232%' then 1
+               else 0 end)
+                                                  as node10_gen3_plubti_rev253_rev232_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node1001_gen3%' then 1
+               else 0 end)
+                                                  as node1001_gen3_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node1002_gen3_nascr_plubti%' then 1
+               else 0 end)
+                                                  as node1002_gen3_nascr_plubti_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node1003_gen3_nascr_plubti_at28a%' then 1
+               else 0 end)
+                                                  as node1003_gen3_nascr_plubti_at28a_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node1004_gen3_nascr_plubti_at28a%' then 1
+               else 0 end)
+                                                  as node1004_gen3_nascr_plubti_at28a_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node1005_gen3_nascr_plubti%' then 1
+               else 0 end)
+                                                  as node1005_gen3_nascr_plubti_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node1006_gen3_nascr_plubti_all231%' then 1
+               else 0 end)
+                                                  as node1006_gen3_nascr_plubti_all231_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node1007_gen3_nascr_plubti_all231_atp%' then 1
+               else 0 end)
+                                                  as node1007_gen3_nascr_plubti_all231_atp_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node1008_gen3_nascr_plubti_all231_atp%' then 1
+               else 0 end)
+                                                  as node1008_gen3_nascr_plubti_all231_atp_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node1009_gen3_plubti_all231_atp%' then 1
+               else 0 end)
+                                                  as node1009_gen3_plubti_all231_atp_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node1010_gen3_plubti_all231_atp%' then 1
+               else 0 end)
+                                                  as node1010_gen3_plubti_all231_atp_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node1011_gen3_plubti_all231_atp_fico%' then 1
+               else 0 end)
+                                                  as node1011_gen3_plubti_all231_atp_fico_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node1013_gen3_plubti_all231_atp_fico%' then 1
+               else 0 end)
+                                                  as node1013_gen3_plubti_all231_atp_fico_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node11_gen3_plubti_rev231_cv25%' then 1
+               else 0 end)
+                                                  as node11_gen3_plubti_rev231_cv25_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node12_gen3_plubti_rev231_cv25%' then 1
+               else 0 end)
+                                                  as node12_gen3_plubti_rev231_cv25_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node13_gen3_plubti_rev231_atp%' then 1
+               else 0 end)
+                                                  as node13_gen3_plubti_rev231_atp_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node14_gen3_plubti_rev231_atp%' then 1
+               else 0 end)
+                                                  as node14_gen3_plubti_rev231_atp_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node15_gen3_plubti_rev232_atp%' then 1
+               else 0 end)
+                                                  as node15_gen3_plubti_rev232_atp_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node16_gen3_plubti_rev232_atp%' then 1
+               else 0 end)
+                                                  as node16_gen3_plubti_rev232_atp_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node18_gen3_plubti_rev231%' then 1
+               else 0 end)
+                                                  as node18_gen3_plubti_rev231_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node19_gen3_plubti_rev231%' then 1
+               else 0 end)
+                                                  as node19_gen3_plubti_rev231_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node2_gen3_plubti%' then 1
+               else 0 end)
+                                                  as node2_gen3_plubti_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node22_gen3_plubti_hr101s_rev231%' then 1
+               else 0 end)
+                                                  as node22_gen3_plubti_hr101s_rev231_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node3_gen3_plubti_nascr%' then 1
+               else 0 end)
+                                                  as node3_gen3_plubti_nascr_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node4_gen3_plubti_nascr%' then 1
+               else 0 end)
+                                                  as node4_gen3_plubti_nascr_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node5_gen3_plubti%' then 1
+               else 0 end)
+                                                  as node5_gen3_plubti_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node6_gen3_plubti_rev231%' then 1
+               else 0 end)
+                                                  as node6_gen3_plubti_rev231_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node7_gen3_plubti_rev231%' then 1
+               else 0 end)
+                                                  as node7_gen3_plubti_rev231_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node8_gen3_plubti_rev253%' then 1
+               else 0 end)
+                                                  as node8_gen3_plubti_rev253_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'node9_gen3_plubti_rev253_rev232%' then 1
+               else 0 end)
+                                                  as node9_gen3_plubti_rev253_rev232_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'prime_1stpartyfraudrule04%' then 1
+               else 0 end)
+                                                  as PrimeFPFrule04_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'prime_1stpartyfraudrule05%' then 1
+               else 0 end)
+                                                  as PrimeFPFrule05_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'prime_1stpartyfraudrule06%' then 1
+               else 0 end)
+                                                  as PrimeFPFrule06_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'prime_1stpartyfraudrule07%' then 1
+               else 0 end)
+                                                  as PrimeFPFrule07_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'prime_1stpartyfraudrule08%' then 1
+               else 0 end)
+                                                  as PrimeFPFrule08_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'prime_1stpartyfraudrule09%' then 1
+               else 0 end)
+                                                  as PrimeFPFrule09_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'rti%' then 1
+               else 0 end)
+                                                  as rti_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) like 'toomanyunsecuredinquiries%' then 1
+               else 0 end)
+                                                  as toomanyunsecuredinquiries_ind
+     , max(case
+               when lower(VALUE:decisionCode::string) = '' then 1
+               else 0 end)                        as other_ind
+
+from TDM_SANDBOX.SANDBOX.asd_2303_tu_analysis_exp a
+         left join TDM_UNDERWRITING.CLEANSED.DIODES_OFFICIAL di on a.UW_RESULT_UUID = di.UW_RESULT_UUID
+   , lateral flatten(UW_RESULT:applicationDecisionInfo:impacts)
+group by 1, 2, 3, 4, 5;
+
+--1617131,0
+select count(*) as total, count(*) - count(distinct UW_RESULT_UUID) as dup
+from TDM_SANDBOX.SANDBOX.asd_2303_tu_analysis_rules;
+
+--1141890,0
+--1617131,0
+select count(*) as total, count(*) - count(distinct app_id) as dup
+from TDM_SANDBOX.SANDBOX.asd_2303_tu_analysis_rules;
+
+select di_decision,count(*)
+from TDM_SANDBOX.SANDBOX.asd_2303_tu_analysis_EXP
+where UW_RESULT_UUID not in (
+select UW_RESULT_UUID from TDM_SANDBOX.SANDBOX.asd_2303_tu_analysis_rules)
+group by 1;
+
+-- Get decline rules prioritized according to the same Tableau dashboard
+create or replace table TDM_SANDBOX.SANDBOX.asd_2303_tu_analysis_exp2 as
+select a.*
+          , case
+           when b.MISSINGFICO_IND = 1 then '1 Global Policy Rules'
+           when b.LOWFICO_IND = 1 then '1 Global Policy Rules'
+           when b.LARGECOLLECTIONBALANCE_IND = 1 then '1 Global Policy Rules'
+           when b.LARGECHARGEOFFAMOUNT_IND = 1 then '1 Global Policy Rules'
+           when b.TOOMANYCHARGEOFFTRADES_IND = 1 then '1 Global Policy Rules'
+           when b.TOOFEWTRADES_IND = 1 then '1 Global Policy Rules'
+           when b.BANKRUPTCYIN5YRS_IND = 1 then '1 Global Policy Rules'
+           when b.REPOSSESSION_IND = 1 then '1 Global Policy Rules'
+           when b.TOOMANYCREDITINQUIRIES_IND = 1 then '1 Global Policy Rules'
+           when b.TOOMANYUNSECUREDINQUIRES_IND = 1 then '1 Global Policy Rules'
+           when b.INSUFFICIENTFCF_IND = 1 then '1 Global Policy Rules'
+           when b.NODE1_GEN3_IND = 1 then '2 Non-DM Decision Tree'
+           when b.NODE4_GEN3_UBTI_RTA7300_IND = 1 then '2 Non-DM Decision Tree'
+           when b.NODE5_GEN3_UBTI_RTA7300_IND = 1 then '2 Non-DM Decision Tree'
+           when b.NODE6_GEN3_UBTI_IND = 1 then '2 Non-DM Decision Tree'
+           when b.NODE10_GEN3_UBTI_IND = 1 then '2 Non-DM Decision Tree'
+           when b.NODE11_GEN3_UBTI_IND = 1 then '2 Non-DM Decision Tree'
+           when b.NODE13_GEN3_UBTI_IND = 1 then '2 Non-DM Decision Tree'
+           when b.NODE14_GEN3_UBTI_IND = 1 then '2 Non-DM Decision Tree'
+           when b.NODE17_GEN3_UBTI_TBCA2201_IND = 1 then '2 Non-DM Decision Tree'
+           when b.NODE18_GEN3_UBTI_TBCA2201_IND = 1 then '2 Non-DM Decision Tree'
+           when b.NODE19_GEN3_UBTI_TBCA2201_IND = 1 then '2 Non-DM Decision Tree'
+           when b.NODE30_GEN3_UBTI_ATP_TBCC1203_IND = 1 then '2 Non-DM Decision Tree'
+           when b.NODE31_GEN3_UBTI_ATP_TBCC1203_IND = 1 then '2 Non-DM Decision Tree'
+           when b.NODE34_GEN3_UBTI_ATP_TBCC4206_IND = 1 then '2 Non-DM Decision Tree'
+           when b.NODE44_GEN3_UBTI_ALL5825_IND = 1 then '2 Non-DM Decision Tree'
+           when b.NODE1002_GEN3_UBTI_IND = 1 then '3 DM Decision Tree'
+           when b.NODE1003_GEN3_UBTI_IND = 1 then '3 DM Decision Tree'
+           when b.NODE1006_GEN3_UBTI_IND = 1 then '3 DM Decision Tree'
+           when b.NODE1007_GEN3_UBTI_IND = 1 then '3 DM Decision Tree'
+           when b.NODE1009_GEN3_UBTI_IND = 1 then '3 DM Decision Tree'
+           when b.NODE1010_GEN3_UBTI_IND = 1 then '3 DM Decision Tree'
+           when b.NODE1015_GEN3_UBTI_ALS5400_IND = 1 then '3 DM Decision Tree'
+           when b.NODE1021_GEN3_UBTI_ATP_TBCC2203_IND = 1 then '3 DM Decision Tree'
+           when b.NODE1022_GEN3_UBTI_ATP_TBCC2203_IND = 1 then '3 DM Decision Tree'
+           when b.NODE1023_GEN3_UBTI_ATP_IND = 1 then '3 DM Decision Tree'
+           when b.NODE1035_GEN3_UBTI_TBCA3279_TBCC3261_IND = 1 then '3 DM Decision Tree'
+           when b.BKSCORE_RTI_IND = 1 then '4 Overlays'
+           when b.GEN3_POSTLOANUBTI_IND = 1 then '4 Overlays'
+           when b.LOWMOTR_RTI_DTR_IND = 1 then '4 Overlays'
+           when b.OLNDECLINE_IND = 1 then '4 Overlays'
+           when b.FPFRULE01_IND = 1 then '5 FPF Rule'
+           when b.FPFRULE02_IND = 1 then '5 FPF Rule'
+           when b.FPFRULE03_IND = 1 then '5 FPF Rule'
+           when b.FPFRULE04_IND = 1 then '5 FPF Rule'
+           when b.FPFRULE05_IND = 1 then '5 FPF Rule'
+           when b.FPFRULE06_IND = 1 then '5 FPF Rule'
+           when b.FPFRULE07_IND = 1 then '5 FPF Rule'
+           when b.FPFRULE08_IND = 1 then '5 FPF Rule'
+           when b.FPFRULE09_IND = 1 then '5 FPF Rule'
+           when b.FPFRULE10_IND = 1 then '5 FPF Rule'
+           when b.FPFRULE11_IND = 1 then '5 FPF Rule'
+           when b.FPFRULE12_IND = 1 then '5 FPF Rule'
+           when b.FPFRULE13_IND = 1 then '5 FPF Rule'
+           when b.FPFRULE14_IND = 1 then '5 FPF Rule'
+           when b.PrimeFPFrule04_ind = 1 then '5 FPF Rule'
+           when b.PrimeFPFrule05_ind = 1 then '5 FPF Rule'
+           when b.PrimeFPFrule06_ind = 1 then '5 FPF Rule'
+           when b.PrimeFPFrule07_ind = 1 then '5 FPF Rule'
+           when b.PrimeFPFrule08_ind = 1 then '5 FPF Rule'
+           when b.PrimeFPFrule09_ind = 1 then '5 FPF Rule'
+           when b.FPFfraudprimerule10_ind = 1 then '5 FPF Rule'
+           when b.FPFfraudprimerule11_ind = 1 then '5 FPF Rule'
+           when b.FPFfraudprimerule12_ind = 1 then '5 FPF Rule'
+           when b.FPFfraudprimerule13_ind = 1 then '5 FPF Rule'
+           when b.FPFfraudprimerule14_ind = 1 then '5 FPF Rule'
+           when b.FPFfraudprimerule15_ind = 1 then '5 FPF Rule'
+           when b.FPFfraudprimerule16_ind = 1 then '5 FPF Rule'
+           when b.FPFfraudprimerule17_ind = 1 then '5 FPF Rule'
+           when b.FPFfraudprimerule18_ind = 1 then '5 FPF Rule'
+           when b.FPFfraudprimerule19_ind = 1 then '5 FPF Rule'
+           when b.FPFfraudprimerule20_ind = 1 then '5 FPF Rule'
+           when b.FPFfraudprimerule21_ind = 1 then '5 FPF Rule'
+           when b.FPFfraudprimerule22_ind = 1 then '5 FPF Rule'
+           when b.FPFfraudprimerule23_ind = 1 then '5 FPF Rule'
+           when b.NOOFFERSAVAILABLE_IND = 1 then '6 Others'
+           when b.INELIGIBLEOFFERDUETOMAXOFFERAMOUNT_IND = 1 then '6 Others'
+           when b.DECEASEDAPP_IND = 1 then '6 Others'
+           when b.UW_RESULT_UUID is not null or a.di_decision = 'DECLINE' then '6 Others' end   as Category
+     , case
+           when b.MISSINGFICO_IND = 1 then '01 MISSINGFICO'
+           when b.LOWFICO_IND = 1 then '02 LOWFICO'
+           when b.LARGECOLLECTIONBALANCE_IND = 1 then '03 LARGECOLLECTIONBALANCE'
+           when b.LARGECHARGEOFFAMOUNT_IND = 1 then '04 LARGECHARGEOFFAMOUNT'
+           when b.TOOMANYCHARGEOFFTRADES_IND = 1 then '05 TOOMANYCHARGEOFFTRADES'
+           when b.TOOFEWTRADES_IND = 1 then '06 TOOFEWTRADES'
+           when b.BANKRUPTCYIN5YRS_IND = 1 then '07 BANKRUPTCYIN5YRS'
+           when b.REPOSSESSION_IND = 1 then '08 REPOSSESSION'
+           when b.TOOMANYCREDITINQUIRIES_IND = 1 then '09 TOOMANYCREDITINQUIRIES'
+           when b.TOOMANYUNSECUREDINQUIRES_IND = 1 then '10 TOOMANYUNSECUREDINQUIRES'
+           when b.INSUFFICIENTFCF_IND = 1 then '11 INSUFFICIENTFCF'
+           when b.NODE1_GEN3_IND = 1 then '12 NODE1_GEN3'
+           when b.NODE4_GEN3_UBTI_RTA7300_IND = 1 then '13 NODE4_GEN3_UBTI_RTA7300'
+           when b.NODE5_GEN3_UBTI_RTA7300_IND = 1 then '14 NODE5_GEN3_UBTI_RTA7300'
+           when b.NODE6_GEN3_UBTI_IND = 1 then '15 NODE6_GEN3_UBTI'
+           when b.NODE10_GEN3_UBTI_IND = 1 then '16 NODE10_GEN3_UBTI'
+           when b.NODE11_GEN3_UBTI_IND = 1 then '17 NODE11_GEN3_UBTI'
+           when b.NODE13_GEN3_UBTI_IND = 1 then '18 NODE13_GEN3_UBTI'
+           when b.NODE14_GEN3_UBTI_IND = 1 then '19 NODE14_GEN3_UBTI'
+           when b.NODE17_GEN3_UBTI_TBCA2201_IND = 1 then '20 NODE17_GEN3_UBTI_TBCA2201'
+           when b.NODE18_GEN3_UBTI_TBCA2201_IND = 1 then '21 NODE18_GEN3_UBTI_TBCA2201'
+           when b.NODE19_GEN3_UBTI_TBCA2201_IND = 1 then '22 NODE19_GEN3_UBTI_TBCA2201'
+           when b.NODE30_GEN3_UBTI_ATP_TBCC1203_IND = 1 then '23 NODE30_GEN3_UBTI_ATP_TBCC1203'
+           when b.NODE31_GEN3_UBTI_ATP_TBCC1203_IND = 1 then '24 NODE31_GEN3_UBTI_ATP_TBCC1203'
+           when b.NODE34_GEN3_UBTI_ATP_TBCC4206_IND = 1 then '25 NODE34_GEN3_UBTI_ATP_TBCC4206'
+           when b.NODE44_GEN3_UBTI_ALL5825_IND = 1 then '26 NODE44_GEN3_UBTI_ALL5825'
+           when b.NODE1002_GEN3_UBTI_IND = 1 then '27 NODE1002_GEN3_UBTI'
+           when b.NODE1003_GEN3_UBTI_IND = 1 then '28 NODE1003_GEN3_UBTI'
+           when b.NODE1006_GEN3_UBTI_IND = 1 then '29 NODE1006_GEN3_UBTI'
+           when b.NODE1007_GEN3_UBTI_IND = 1 then '30 NODE1007_GEN3_UBTI'
+           when b.NODE1009_GEN3_UBTI_IND = 1 then '31 NODE1009_GEN3_UBTI'
+           when b.NODE1010_GEN3_UBTI_IND = 1 then '32 NODE1010_GEN3_UBTI'
+           when b.NODE1015_GEN3_UBTI_ALS5400_IND = 1 then '33 NODE1015_GEN3_UBTI_ALS5400'
+           when b.NODE1021_GEN3_UBTI_ATP_TBCC2203_IND = 1 then '34 NODE1021_GEN3_UBTI_ATP_TBCC2203'
+           when b.NODE1022_GEN3_UBTI_ATP_TBCC2203_IND = 1 then '35 NODE1022_GEN3_UBTI_ATP_TBCC2203'
+           when b.NODE1023_GEN3_UBTI_ATP_IND = 1 then '36 NODE1023_GEN3_UBTI_ATP'
+           when b.NODE1035_GEN3_UBTI_TBCA3279_TBCC3261_IND = 1 then '37 NODE1035_GEN3_UBTI_TBCA3279_TBCC3261'
+           when b.BKSCORE_RTI_IND = 1 then '38 BKSCORE_RTI'
+           when b.GEN3_POSTLOANUBTI_IND = 1 then '39 GEN3_POSTLOANUBTI'
+           when b.LOWMOTR_RTI_DTR_IND = 1 then '40 LOWMOTR_RTI_DTR'
+           when b.OLNDECLINE_IND = 1 then '41 OLNDECLINE'
+           when b.FPFRULE01_IND = 1 then '42 FPFRULE01'
+           when b.FPFRULE02_IND = 1 then '43 FPFRULE02'
+           when b.FPFRULE03_IND = 1 then '44 FPFRULE03'
+           when b.FPFRULE04_IND = 1 then '45 FPFRULE04'
+           when b.FPFRULE05_IND = 1 then '46 FPFRULE05'
+           when b.FPFRULE06_IND = 1 then '47 FPFRULE06'
+           when b.FPFRULE07_IND = 1 then '48 FPFRULE07'
+           when b.FPFRULE08_IND = 1 then '49 FPFRULE08'
+           when b.FPFRULE09_IND = 1 then '50 FPFRULE09'
+           when b.FPFRULE10_IND = 1 then '51 FPFRULE10'
+           when b.FPFRULE11_IND = 1 then '52 FPFRULE11'
+           when b.FPFRULE12_IND = 1 then '53 FPFRULE12'
+           when b.FPFRULE13_IND = 1 then '54 FPFRULE13'
+           when b.FPFRULE14_IND = 1 then '55 FPFRULE14'
+           when b.PrimeFPFrule04_ind = 1 then '56 PrimeFPFrule04'
+           when b.PrimeFPFrule05_ind = 1 then '57 PrimeFPFrule05'
+           when b.PrimeFPFrule06_ind = 1 then '58 PrimeFPFrule06'
+           when b.PrimeFPFrule07_ind = 1 then '59 PrimeFPFrule07'
+           when b.PrimeFPFrule08_ind = 1 then '60 PrimeFPFrule08'
+           when b.PrimeFPFrule09_ind = 1 then '61 PrimeFPFrule09'
+           when b.FPFfraudprimerule10_ind = 1 then '62 FPFfraudprimerule10'
+           when b.FPFfraudprimerule11_ind = 1 then '63 FPFfraudprimerule11'
+           when b.FPFfraudprimerule12_ind = 1 then '64 FPFfraudprimerule12'
+           when b.FPFfraudprimerule13_ind = 1 then '65 FPFfraudprimerule13'
+           when b.FPFfraudprimerule14_ind = 1 then '66 FPFfraudprimerule14'
+           when b.FPFfraudprimerule15_ind = 1 then '67 FPFfraudprimerule15'
+           when b.FPFfraudprimerule16_ind = 1 then '68 FPFfraudprimerule16'
+           when b.FPFfraudprimerule17_ind = 1 then '69 FPFfraudprimerule17'
+           when b.FPFfraudprimerule18_ind = 1 then '70 FPFfraudprimerule18'
+           when b.FPFfraudprimerule19_ind = 1 then '71 FPFfraudprimerule19'
+           when b.FPFfraudprimerule20_ind = 1 then '72 FPFfraudprimerule20'
+           when b.FPFfraudprimerule21_ind = 1 then '73 FPFfraudprimerule21'
+           when b.FPFfraudprimerule22_ind = 1 then '74 FPFfraudprimerule22'
+           when b.FPFfraudprimerule23_ind = 1 then '75 FPFfraudprimerule23'
+           when b.NOOFFERSAVAILABLE_IND = 1 then '76 NOOFFERSAVAILABLE'
+           when b.INELIGIBLEOFFERDUETOMAXOFFERAMOUNT_IND = 1 then '77 INELIGIBLEOFFERDUETOMAXOFFERAMOUNT'
+           when b.DECEASEDAPP_IND = 1 then '78 DECEASEDAPP'
+           when b.UW_RESULT_UUID is not null or a.di_decision = 'DECLINE' then '79 UNKNOWN' end as Subcategory
+
+from TDM_SANDBOX.SANDBOX.asd_2303_tu_analysis_exp a
+         left join TDM_SANDBOX.SANDBOX.asd_2303_tu_analysis_rules b on a.UW_RESULT_UUID = b.UW_RESULT_UUID;
+
+--1636644,0
+--2308905,0
+select count(*) as total, count(*) - count(distinct id) as dup
+from TDM_SANDBOX.SANDBOX.asd_2303_tu_analysis_exp2;
+
+-- Validate decline reason and model decision
+select di_decision, category, subcategory, count(*)
+from TDM_SANDBOX.SANDBOX.asd_2303_tu_analysis_exp2
+group by 1, 2, 3
+order by 1, 2, 3;
+
+
+-- Join apps from TU and Experian model runs with funded loans
+create or replace table TDM_SANDBOX.SANDBOX.asd_2303_tu_analysis_sum as
+select dash.*
+     , lbd.LOAN_ID
+     , lbd.ORIGINAL_PRIN                                           as orig_prin
+     , a.UW_REQUEST_UUID
+     , a.UW_RESULT_UUID
+     , a.creditBureauStrategy
+     , a.di_decision
+     , a.tu_reconsider_flag_request
+     , a.tu_reconsider_flag_request_carryforward
+     , a.tu_reconsider_flag_result
+     , a.tu_reconsider_flag_result_carryforward
+     , a.TU_FICO
+     , a.Exp_FICO
+     , a.TU_Gen3
+     , a.Exp_Gen3
+     , a.TU_FICO_SCORE_real
+     , a.COL5060
+     , a.ALL5301
+     , a.ALL2840
+     , a.ALL0416
+     , a.ALL9220
+     , a.ALL2830
+     , a.IQT9420
+     , a.SOFIINQ
+     , a.app_type                                                  as app_type2
+
+    /****** TU ******/
+     , b.UW_REQUEST_UUID                                           as TU_UW_REQUEST_UUID
+     , b.UW_RESULT_UUID                                            as TU_UW_RESULT_UUID
+     , b.creditBureauStrategy                                      as TU_creditBureauStrategy
+     , b.di_decision                                               as TU_di_decision
+     , b.tu_reconsider_flag_request                                as TU_tu_reconsider_flag_request
+     , b.tu_reconsider_flag_request_carryforward                   as TU_tu_reconsider_flag_request_carryforward
+     , b.tu_reconsider_flag_result                                 as TU_tu_reconsider_flag_result
+     , b.tu_reconsider_flag_result_carryforward                    as TU_tu_reconsider_flag_result_carryforward
+     , b.TU_FICO                                                   as TU_TU_FICO
+     , b.Exp_FICO                                                  as TU_Exp_FICO
+     , b.TU_Gen3                                                   as TU_TU_Gen3
+     , b.TU_Gen3_cob                                               as TU_TU_Gen3_cob
+     , b.Exp_Gen3                                                  as TU_Exp_Gen3
+     , b.FCF                                                       as TU_FCF
+     , b.UBTI                                                      as TU_UBTI
+     , b.TU_FICO_SCORE_real                                        as TU_TU_FICO_SCORE_real
+     , b.TU_FICO_SCORE_real_cob                                    as TU_TU_FICO_SCORE_real_cob
+     , b.TU_IQT9420_real                                           as TU_TU_IQT9420_real
+     , b.TU_IQT9420_real_cob                                       as TU_TU_IQT9420_real_cob
+     , b.TU_ALL0416_real                                           as TU_TU_ALL0416_real
+     , b.TU_ALL0416_real_cob                                       as TU_TU_ALL0416_real_cob
+     , b.COL5060                                                   as TU_COL5060
+     , b.ALL5301                                                   as TU_ALL5301
+     , b.ALL2840                                                   as TU_ALL2840
+     , b.ALL0416                                                   as TU_ALL0416
+     , b.ALL9220                                                   as TU_ALL9220
+     , b.ALL2830                                                   as TU_ALL2830
+     , b.IQT9420                                                   as TU_IQT9420
+     , b.SOFIINQ                                                   as TU_SOFIINQ
+     , b.COL5060_cob                                               as TU_COL5060_cob
+     , b.ALL5301_cob                                               as TU_ALL5301_cob
+     , b.ALL2840_cob                                               as TU_ALL2840_cob
+     , b.ALL0416_cob                                               as TU_ALL0416_cob
+     , b.ALL9220_cob                                               as TU_ALL9220_cob
+     , b.ALL2830_cob                                               as TU_ALL2830_cob
+     , b.IQT9420_cob                                               as TU_IQT9420_cob
+     , b.SOFIINQ_cob                                               as TU_SOFIINQ_cob
+
+    /****** EXP ******/
+     , c.UW_REQUEST_UUID                                           as EXP_UW_REQUEST_UUID
+     , c.UW_RESULT_UUID                                            as EXP_UW_RESULT_UUID
+     , c.creditBureauStrategy                                      as EXP_creditBureauStrategy
+     , c.di_decision                                               as EXP_di_decision
+     , c.tu_reconsider_flag_request                                as EXP_tu_reconsider_flag_request
+     , c.tu_reconsider_flag_request_carryforward                   as EXP_tu_reconsider_flag_request_carryforward
+     , c.tu_reconsider_flag_result                                 as EXP_tu_reconsider_flag_result
+     , c.tu_reconsider_flag_result_carryforward                    as EXP_tu_reconsider_flag_result_carryforward
+     , c.TU_FICO                                                   as EXP_TU_FICO
+     , c.Exp_FICO                                                  as EXP_Exp_FICO
+     , c.Exp_FICO_cob                                              as EXP_Exp_FICO_cob
+     , c.TU_Gen3                                                   as EXP_TU_Gen3
+     , c.Exp_Gen3                                                  as EXP_Exp_Gen3
+     , c.Exp_Gen3_cob                                              as EXP_Exp_Gen3_cob
+     , c.FCF                                                       as EXP_FCF
+     , c.UBTI                                                      as EXP_UBTI
+     , c.TU_FICO_SCORE_real                                        as EXP_TU_FICO_SCORE_real
+     , c.COL5060                                                   as EXP_COL5060
+     , c.ALL5301                                                   as EXP_ALL5301
+     , c.ALL2840                                                   as EXP_ALL2840
+     , c.ALL0416                                                   as EXP_ALL0416
+     , c.ALL9220                                                   as EXP_ALL9220
+     , c.ALL2830                                                   as EXP_ALL2830
+     , c.IQT9420                                                   as EXP_IQT9420
+     , c.SOFIINQ                                                   as EXP_SOFIINQ
+     , c.COL5060_cob                                               as EXP_COL5060_cob
+     , c.ALL5301_cob                                               as EXP_ALL5301_cob
+     , c.ALL2840_cob                                               as EXP_ALL2840_cob
+     , c.ALL0416_cob                                               as EXP_ALL0416_cob
+     , c.ALL9220_cob                                               as EXP_ALL9220_cob
+     , c.ALL2830_cob                                               as EXP_ALL2830_cob
+     , c.IQT9420_cob                                               as EXP_IQT9420_cob
+     , c.SOFIINQ_cob                                               as EXP_SOFIINQ_cob
+     , c.Category                                                  as EXP_Category
+     , c.Subcategory                                               as EXP_Subcategory
+
+    /****** PERF ******/
+     , case
+           when lbd.DAYS_PAST_DUE >= 1 then 1
+           when lbd.LOAN_STATUS in ('CHARGE OFF', 'CHARGE OFF PIF', 'CHARGE OFF COMPLETE', 'WRITE OFF') then 1
+           else 0 end                                              as over_dpd1p_co_ind
+     , case
+           when lbd.DAYS_PAST_DUE >= 1 then lbd.CURRENT_PRIN
+           when lbd.LOAN_STATUS in ('CHARGE OFF', 'CHARGE OFF PIF', 'CHARGE OFF COMPLETE', 'WRITE OFF')
+               then -lbd.CHARGE_OFF_PRIN
+           else 0 end                                              as over_dpd1p_co_prin
+     , case
+           when greatest(ever.DAYS_PAST_DUE, lbd.DAYS_PAST_DUE) >= 1 then 1
+           when ever.LOAN_STATUS in ('CHARGE OFF', 'CHARGE OFF PIF', 'CHARGE OFF COMPLETE', 'WRITE OFF') or
+                lbd.LOAN_STATUS in ('CHARGE OFF', 'CHARGE OFF PIF', 'CHARGE OFF COMPLETE', 'WRITE OFF') then 1
+           else 0 end                                              as ever_dpd1p_co_ind
+     , case
+           when greatest(ever.DAYS_PAST_DUE, lbd.DAYS_PAST_DUE) >= 1 and
+                greatest(ever.DAYS_PAST_DUE, lbd.DAYS_PAST_DUE) = ever.DAYS_PAST_DUE then ever.CURRENT_PRIN
+           when greatest(ever.DAYS_PAST_DUE, lbd.DAYS_PAST_DUE) >= 1 then lbd.CURRENT_PRIN
+           when ever.LOAN_STATUS in ('CHARGE OFF', 'CHARGE OFF PIF', 'CHARGE OFF COMPLETE', 'WRITE OFF')
+               then -lbd.CHARGE_OFF_PRIN
+           else 0 end                                              as ever_dpd1p_co_prin
+     , case
+           when ever.DAYS_PAST_DUE >= 30 then 1
+           when ever.LOAN_STATUS in ('CHARGE OFF', 'CHARGE OFF PIF', 'CHARGE OFF COMPLETE', 'WRITE OFF') then 1
+           else 0 end                                              as ever_dpd30p_co_ind
+     , case
+           when ever.DAYS_PAST_DUE >= 30 then ever.CURRENT_PRIN
+           when ever.LOAN_STATUS in ('CHARGE OFF', 'CHARGE OFF PIF', 'CHARGE OFF COMPLETE', 'WRITE OFF')
+               then -lbd.CHARGE_OFF_PRIN
+           else 0 end                                              as ever_dpd30p_co_prin
+
+
+     , lbd.CONFIRMED_FRAUD
+     , cf.conf_fraud
+     , case when fraud_atk.uid = af.applicant_id then 1 else 0 end as fraud_atk
+     , voi.voi_method_new
+     , ach.ach_mob1
+     , ach.ach_mob3
+from TDM_RISK_MGMT_HUB.SUMMARIZED.PL_APPLICATIONS_FUNNEL_DASHBOARD dash
+         left join TDM_SANDBOX.SANDBOX.asd_2303_tu_analysis_all a on dash.id = a.id
+         left join TDM_SANDBOX.SANDBOX.asd_2303_tu_analysis_tu b on dash.id = b.id
+         left join TDM_SANDBOX.SANDBOX.asd_2303_tu_analysis_exp2 c on dash.id = c.id
+         left join DWMART.LOANS_BLENDED_DAILY lbd on dash.id = lbd.id -- May 17th 2023
+         left join (select LOAN_ID,
+                           max(DAYS_PAST_DUE)     as days_past_due,
+                           max(current_prin)      as current_prin,
+                           max(case
+                                   when LOAN_STATUS in
+                                        ('CHARGE OFF', 'CHARGE OFF PIF', 'CHARGE OFF COMPLETE', 'WRITE OFF')
+                                       then 'CHARGE OFF'
+                                   else null end) as loan_status
+
+                    from (select *
+                          from (
+                                   select LOAN_ID, DAYS_PAST_DUE, current_prin, PAST_DUE_AMOUNT, LOAN_STATUS
+                                   from DWMART.LOANS_BLENDED_MONTHLY
+                                   where ORIGINATION_DATE >= '2022-11-01'
+                               ) a
+                              qualify row_number() over (partition by LOAN_ID order by DAYS_PAST_DUE desc, current_prin desc) =
+                                      1)
+
+                    group by 1) ever on lbd.loan_id = ever.LOAN_ID
+         LEFT JOIN TDM_RISK_MGMT_HUB.MODELED.applications_file AF on dash.ID = AF.ID
+         left join tdm_sandbox.sandbox.plmb_fraud_uid_list as fraud_atk on af.applicant_id = fraud_atk.uid
+         left join
+     (select id
+           , max(case when activity_id = '1309' then 1 else 0 end) as conf_fraud
+      from TDM_RISK_MGMT_HUB.MODELED.applications_file af
+               left join TDM_RISK_MGMT_HUB.MODELED.application_activity_facts aaf
+                         on af.dw_application_id = aaf.application_id
+               left join TDM_RISK_MGMT_HUB.MODELED.dates st_dt on aaf.active_date_id = st_dt.date_id
+      where APPLICATION_TYPE = 'PL'
+        and af.DATE_DOC_UPLOAD >= '2022-01-01'
+        and af.DATE_DOC_UPLOAD < '2023-03-01'
+        and ACTIVITY_ID in ('1309')
+      group by 1) as cf on dash.id = cf.id
+         left join (
+    select af.id                           as af_id,
+           act.*,
+           case
+               when af.DATE_DOC_UPLOAD is null then '00. No DU'
+               when act.TWN_flag = 1 then '01. TWN'
+               when act.lem_flag = 1 then '02. LEM VOI'
+               when act.bypass_flag = 1 then '03. VOI Bypass'
+               when act.tof_model_flag = 1 then '04. Income Model (TOF)'
+               when act.point_prdctv_flag = 1 then '05. Point Predictive'
+               when act.nova_flag = 1 then '06. Nova'
+               when act.paystub_ocr_flag = 1 then '07. Paystub OCR'
+               when act.bof_model_flag = 1 then '08. Income Model (BOF)'
+               when act.ir_flag = 1 then '09. Manual'
+               when af.application_type in ('MEDREFI', 'DENTREFI') and act.med_dent_ir_flag = 1 then '09. Manual'
+               when af.application_type = 'INSCHOOL' then '09. Manual'
+               when af.current_activity in ('Signing', 'Funded') then '09. Manual'
+               when af.current_activity in ('Declined', 'Expired', 'Withdrawn') and act.ir_flag = 0
+                   then '10. Declined / Expired / Withdrawn before VOI'
+               else '11. Awaiting VOI' end as voi_method_new
+    from TDM_RISK_MGMT_HUB.MODELED.applications_file af
+             left join (select ta.TARGET_ID                                                as id
+                             , max(case
+                                       when ta.activity in ('auto verify employment and income') and
+                                            ta.status in ('VERIFIED') then 1
+                                       else 0 end)                                         as TWN_flag
+                             , max(case
+                                       when ta.activity in ('auto verify employment and income') and
+                                            ta.status in ('NOT VERIFIED') then 1
+                                       else 0 end)                                         as TWN_fail_flag
+                             , max(case
+                                       when ta.activity in ('income review', 'complex income review') and
+                                            ta.status in ('SKIPPED') and irb.BYPASS_STATUS not in
+                                                                         ('YES_SELECTED_MODEL', 'YES_SELECTED_LEM',
+                                                                          'YES_SELECTED_POINT_PREDICTIVE') then 1
+                                       when ta.activity in ('auto income review') and ta.status in ('PASSED') and
+                                            irb.BYPASS_STATUS not in
+                                            ('YES_SELECTED_MODEL', 'YES_SELECTED_LEM', 'YES_SELECTED_POINT_PREDICTIVE')
+                                           then 1
+                                       else 0 end)                                         as bypass_flag
+                             , max(case
+                                       when ta.activity in ('income review', 'complex income review') and
+                                            ta.status in ('SKIPPED') and
+                                            irb.BYPASS_STATUS = 'YES_SELECTED_POINT_PREDICTIVE'
+                                           then 1
+                                       when ta.activity in ('auto income review') and ta.status in ('PASSED') and
+                                            irb.BYPASS_STATUS = 'YES_SELECTED_POINT_PREDICTIVE' then 1
+                                       else 0 end)                                         as point_prdctv_flag
+                             , max(case
+                                       when ta.activity in ('income review', 'complex income review') and
+                                            ta.status in ('SKIPPED') and irb.BYPASS_STATUS = 'YES_SELECTED_LEM' then 1
+                                       when ta.activity in ('auto income review') and ta.status in ('PASSED') and
+                                            irb.BYPASS_STATUS = 'YES_SELECTED_LEM' then 1
+                                       else 0 end)                                         as lem_flag
+                             , max(case
+                                       when ta.activity in ('income review', 'complex income review') and
+                                            ta.status in ('SKIPPED') and irb.BYPASS_STATUS = 'YES_SELECTED_MODEL' then 1
+                                       when ta.activity in ('auto income review') and ta.status in ('PASSED') and
+                                            irb.BYPASS_STATUS = 'YES_SELECTED_MODEL' then 1
+                                       else 0 end)                                         as tof_model_flag
+                             , max(case
+                                       when ta.activity in ('verify income') and ta.status in ('PASSED_PAYSTUB') then 1
+                                       else 0 end)                                         as paystub_ocr_flag
+                             , max(case
+                                       when ta.activity in ('verify income') and ta.status in ('PASSED_IL') then 1
+                                       else 0 end)                                         as nova_flag
+                             , max(case
+                                       when ta.activity in ('verify income') and ta.status in ('PASSED_IL_MODEL') then 1
+                                       else 0 end)                                         as bof_model_flag
+                             , max(case
+                                       when ta.activity in ('income review', 'complex income review') and
+                                            ta.status not in ('SKIPPED') then 1
+                                       else 0 end)                                         as ir_flag
+                             , max(case
+                                       when ta.activity in ('application review') and ta.status in ('MGR REVIEW') then 1
+                                       else 0 end)                                         as med_dent_ir_flag
+                             , max(case
+                                       when ta.activity in ('app validation') and ta.status in ('OFFER-CHANGE') then 1
+                                       else 0 end)                                         as offer_change_ind
+                             , max(case when ta.activity in ('signing') then 1 else 0 end) as signing_ind
+                        from TDM_ORIGINATIONS.CLEANSED.CORE_TARGET_ACTIVITY ta
+                                 left join (select APPLICATION_ID
+                                                 , BYPASS_STATUS
+                                                 , row_number() over (partition by APPLICATION_ID order by CREATED_DT desc) as row_num
+                                            from TDM_ORIGINATIONS.CLEANSED.CORE_INCOME_REVIEW_BYPASS
+                                            where BYPASS_STATUS like 'YES_SELECTED%') irb
+                                           on ta.TARGET_ID = irb.APPLICATION_ID and irb.row_num = 1
+                        where date(ta.CREATED_DT) >= '2016-01-01'
+                        group by 1) act on af.ID = act.id
+
+    where af.APPLICATION_TYPE in ('PL')
+      and af.DATE_DOC_UPLOAD >= '2016-01-01'
+      and af.date_start between '2022-12-01' and '2023-05-15'
+) voi on dash.id = voi.id
+         left join (
+    select LOAN_ID, max(ach_mob1) as ach_mob1, max(ach_mob3) as ach_mob3
+    from (
+             select lbd.LOAN_ID
+                  , lbd.ORIGINATION_DATE
+                  , cast(substring(ach.REPORTING_DATE_ID, 1, 4) || '-' ||
+                         substring(ach.REPORTING_DATE_ID, 5, 2) || '-' ||
+                         substring(ach.REPORTING_DATE_ID, 7, 2)
+                 as date)                                                                as REPORTING_DATE
+                  , ach.ach
+                  , case when REPORTING_DATE - ORIGINATION_DATE = 30 then ach else 0 end as ach_mob1
+                  , case when REPORTING_DATE - ORIGINATION_DATE = 90 then ach else 0 end as ach_mob3
+             from DWMART.LOANS_BLENDED_DAILY lbd
+                      left join (select LOAN_ID,
+                                        REPORTING_DATE_ID,
+                                        ach_red_percentage,
+                                        case when ach_red_percentage > 0 then 1 else 0 end as ach
+                                 from sofidw.daily_loan_facts
+                                 where ach_red_percentage > 0) ach on lbd.LOAN_ID = ach.LOAN_ID
+         )
+    group by 1
+) ach on lbd.loan_id = ach.loan_id
+where dash.application_type = 'PL'
+  and dash.date_start between '2022-12-01' and '2023-05-15';
+
+-- EVER DPD daily
+alter table TDM_SANDBOX.SANDBOX.asd_2303_tu_analysis_sum add EVER_DPD1P_CO_IND_daily int,EVER_DPD1P_CO_PRIN_daily float, EVER_DPD_May18 int;
+
+update TDM_SANDBOX.SANDBOX.asd_2303_tu_analysis_sum as a
+set EVER_DPD1P_CO_IND_daily=case when b.DELINQUENT_DAYS > 0 then 1 else 0 end,
+    EVER_DPD_May18=b.DELINQUENT_DAYS,
+    EVER_DPD1P_CO_PRIN_daily=b.PRIN_AMOUNT
+from (
+         select *
+         from (
+                  select REPORTING_DATE_ID, a.LOAN_ID, PRIN_AMOUNT, DELINQUENT_DAYS
+                  from sofidw.daily_loan_facts a
+                           inner join (select loan_id from TDM_SANDBOX.SANDBOX.asd_2303_tu_analysis_sum group by 1) b
+                                      on a.LOAN_ID = b.loan_id
+                  where 1 = 1
+                    --and a.loan_id in (1777826, 1807658)
+                    and DELINQUENT_DAYS > 0
+              )
+             qualify row_number() over (partition by LOAN_ID order by REPORTING_DATE_ID desc) = 1
+     ) b
+where a.LOAN_ID = b.LOAN_ID;
+
+select loan_id,
+       ORIG_PRIN,
+       EVER_DPD1P_CO_IND_daily,
+       EVER_DPD1P_CO_PRIN_daily,
+       EVER_DPD_May18,
+       EVER_DPD1P_CO_IND,
+       EVER_DPD1P_CO_PRIN
+from TDM_SANDBOX.SANDBOX.asd_2303_tu_analysis_sum
+where 1 = 1
+  and coalesce(conf_fraud, 0) + coalesce(CONFIRMED_FRAUD, 0) + coalesce(fraud_atk, 0) = 0
+  and coalesce(EXP_di_decision, 'DECLINE') = 'DECLINE'
+  and EXP_TU_RECONSIDER_FLAG_RESULT = 'SWAP_EXPERIAN_FOR_TRANSUNION'
+  and CREDITBUREAUSTRATEGY = 'EXP_WITH_TU_FULL'
+  and TU_DI_DECISION = 'ACCEPT'
+  and date_fund is not null
+--  and EVER_DPD1P_CO_IND_daily=1;
+  and loan_id in (1777826, 1824218, 1858131, 1808404);
+
+select count(*),max(DAYS_PAST_DUE)
+from TDM_SANDBOX.SANDBOX.asd_2303_tu_analysis_sum a inner join TDM_RISK_MGMT_HUB.MODELED.LOANS_BLENDED_DAILY b on a.LOAN_ID=b.LOAN_ID
+where 1 = 1
+  and coalesce(conf_fraud, 0) + coalesce(a.CONFIRMED_FRAUD, 0) + coalesce(fraud_atk, 0) = 0
+  and coalesce(EXP_di_decision, 'DECLINE') = 'DECLINE'
+  and EXP_TU_RECONSIDER_FLAG_RESULT = 'SWAP_EXPERIAN_FOR_TRANSUNION'
+  and CREDITBUREAUSTRATEGY = 'EXP_WITH_TU_FULL'
+  and TU_DI_DECISION = 'ACCEPT'
+  and date_fund is not null
+and b.DAYS_PAST_DUE>0;
+
+--1690426,0
+--2385849,0
+select count(*) as total, count(*) - count(distinct id) as dup
+from TDM_SANDBOX.SANDBOX.asd_2303_tu_analysis_sum;
+
+select voi_method_new,count(*) as total,count(DATE_FUND)
+from TDM_SANDBOX.SANDBOX.asd_2303_tu_analysis_sum
+group by 1
+order by 1;
+
+select voi_method_new,count(*) as total
+from TDM_SANDBOX.SANDBOX.asd_2303_tu_analysis_sum
+where DATE_FUND between '2023-04-01' and '2023-04-30' and tier<>20
+group by 1
+order by 1;
+
+select count(*),sum(ACH_MOB1),sum(ACH_MOB3),sum(ACH_MOB1)/count(*),sum(ACH_MOB3)/count(*)
+from TDM_SANDBOX.SANDBOX.asd_2303_tu_analysis_sum
+where DATE_FUND between '2023-01-01' and '2023-01-31' and tier<>20;
+
+select count(*),sum(case when b.LOAN_ID is not null then 1 else 0 end),sum(case when b.LOAN_ID is not null then 1 else 0 end)/count(*)
+from TDM_SANDBOX.SANDBOX.asd_2303_tu_analysis_sum a
+left join (select loan_id from sofidw.daily_loan_facts
+                               where ach_red_percentage > 0 group by 1) b on a.LOAN_ID=b.LOAN_ID
+where DATE_FUND between '2023-05-01' and '2023-05-30' and tier<>20;
+
+-- Validates funded loans against Tableau figures
+select  substring(DATE_FUND,1,7) as funded_month
+       ,count(*)                                                                               as funded
+from TDM_SANDBOX.SANDBOX.asd_2303_tu_analysis_sum
+where DATE_FUND is not null and tier<>20 and creditBureauStrategy='EXP_WITH_TU_FULL'
+group by 1
+order by 1;
+
+select substring(date_fund, 1, 7) as funded_month, count(*) as funded
+from TDM_SANDBOX.SANDBOX.asd_2303_tu_analysis_sum
+where tier <> 20 and date_fund is not null
+group by 1
+order by 1;
+
+-- Latest TU funded loan
+select max(DATE_FUND) --2023-05-11
+from TDM_SANDBOX.SANDBOX.asd_2303_tu_analysis_sum
+where 1=1
+and EXP_di_decision='DECLINE'
+and product_category <> 'CRB_Pagaya' and coalesce(conf_fraud,0)+coalesce(CONFIRMED_FRAUD,0)+coalesce(fraud_atk,0)=0
+and creditBureauStrategy like '%FULL%'
+and date_fund is not null;
+
+--TU Funded loans in May 2023
+select a.id,a.loan_id,a.DATE_START,c.DATE_OF_UNDERWRITING as exp_DATE_OF_UNDERWRITING,b.DATE_OF_UNDERWRITING as TU_DATE_OF_UNDERWRITING,a.DATE_FUND,cast(b.DATE_OF_UNDERWRITING as date) as bla
+from TDM_SANDBOX.SANDBOX.asd_2303_tu_analysis_sum a
+inner join TDM_UNDERWRITING.CLEANSED.DIODES_OFFICIAL b on a.TU_UW_REQUEST_UUID=b.UW_REQUEST_UUID
+inner join TDM_UNDERWRITING.CLEANSED.DIODES_OFFICIAL c on a.exp_UW_REQUEST_UUID=c.UW_REQUEST_UUID
+where 1 = 1
+  and coalesce(conf_fraud, 0) + coalesce(CONFIRMED_FRAUD, 0) + coalesce(fraud_atk, 0) = 0
+  and coalesce(EXP_di_decision, 'DECLINE') = 'DECLINE'
+  and EXP_TU_RECONSIDER_FLAG_RESULT = 'SWAP_EXPERIAN_FOR_TRANSUNION'
+  and a.CREDITBUREAUSTRATEGY = 'EXP_WITH_TU_FULL'
+  and TU_DI_DECISION = 'ACCEPT'
+  and date_fund is not null
+and DATE_FUND>='2023-05-01';
+
+select di_decision, exp_di_decision, exp_category, count(*),sum(case when orig_prin>0 then 1 else 0 end) as funded
+from TDM_SANDBOX.SANDBOX.asd_2303_tu_analysis_sum
+where product_category <> 'CRB_Pagaya'
+group by 1, 2, 3
+order by 1, 2, 3;
+
+-- Validates decline reason distribution for TU funded loans
+select exp_di_decision,
+      EXP_Subcategory,count(*)
+from TDM_SANDBOX.SANDBOX.asd_2303_tu_analysis_sum
+where product_category <> 'CRB_Pagaya' and coalesce(conf_fraud,0)+coalesce(CONFIRMED_FRAUD,0)+coalesce(fraud_atk,0)=0
+and creditBureauStrategy like '%FULL%'
+and DATE_FUND is not null
+group by 1, 2
+order by 1, 2;
+
+--Final waterfall
+
+select count(*)                                                                          as tot,
+       sum(case when coalesce(EXP_di_decision, 'DECLINE') = 'DECLINE' then 1 else 0 end) as dec,
+       sum(case
+               when coalesce(EXP_di_decision, 'DECLINE') = 'DECLINE' and
+                    EXP_TU_RECONSIDER_FLAG_RESULT = 'SWAP_EXPERIAN_FOR_TRANSUNION' then 1
+               else 0 end)                                                               as tu_elegible,
+       sum(case
+               when coalesce(EXP_di_decision, 'DECLINE') = 'DECLINE' and
+                    EXP_TU_RECONSIDER_FLAG_RESULT = 'SWAP_EXPERIAN_FOR_TRANSUNION' and
+                    CREDITBUREAUSTRATEGY = 'EXP_WITH_TU_FULL'
+                   then 1
+               else 0 end)                                                               as tu_routed,
+       sum(case
+               when coalesce(EXP_di_decision, 'DECLINE') = 'DECLINE' and
+                    EXP_TU_RECONSIDER_FLAG_RESULT = 'SWAP_EXPERIAN_FOR_TRANSUNION' and
+                    CREDITBUREAUSTRATEGY = 'EXP_WITH_TU_FULL' and TU_DI_DECISION = 'ACCEPT'
+                   then 1
+               else 0 end)                                                               as tu_approved,
+       sum(case
+               when coalesce(EXP_di_decision, 'DECLINE') = 'DECLINE' and
+                    EXP_TU_RECONSIDER_FLAG_RESULT = 'SWAP_EXPERIAN_FOR_TRANSUNION' and
+                    CREDITBUREAUSTRATEGY = 'EXP_WITH_TU_FULL' and TU_DI_DECISION = 'ACCEPT'
+                   and date_fund is not null then 1
+               else 0 end)                                                               as tu_funded
+from TDM_SANDBOX.SANDBOX.asd_2303_tu_analysis_sum
+where 1 = 1
+  --and DATE_START<='2023-03-31'
+  and coalesce(conf_fraud, 0) + coalesce(CONFIRMED_FRAUD, 0) + coalesce(fraud_atk, 0) = 0;
+
+--TU FUNDED
+select substring(date_fund, 1, 7) as funded_month,
+       count(*)                   as funded,
+       sum(case
+               when coalesce(EXP_di_decision, 'DECLINE') = 'DECLINE' and
+                    EXP_TU_RECONSIDER_FLAG_RESULT = 'SWAP_EXPERIAN_FOR_TRANSUNION' and
+                    CREDITBUREAUSTRATEGY = 'EXP_WITH_TU_FULL' and TU_DI_DECISION = 'ACCEPT'
+                   and date_fund is not null then 1
+               else 0 end)        as tu_funded
+from TDM_SANDBOX.SANDBOX.asd_2303_tu_analysis_sum
+where 1 = 1
+  and coalesce(conf_fraud, 0) + coalesce(CONFIRMED_FRAUD, 0) + coalesce(fraud_atk, 0) = 0
+group by 1
+order by 1;
+
+select case when exp_category = '1 Global Policy Rules' then EXP_Subcategory else EXP_Category end as decline_reason
+     , count(*)                                                                                    as tu_approved
+     , sum(case
+               when coalesce(EXP_di_decision, 'DECLINE') = 'DECLINE' and
+                    EXP_TU_RECONSIDER_FLAG_RESULT = 'SWAP_EXPERIAN_FOR_TRANSUNION' and
+                    CREDITBUREAUSTRATEGY = 'EXP_WITH_TU_FULL' and TU_DI_DECISION = 'ACCEPT'
+                   and date_fund is not null then 1
+               else 0 end)                                                                         as tu_funded
+from TDM_SANDBOX.SANDBOX.asd_2303_tu_analysis_sum
+where 1 = 1
+  and coalesce(conf_fraud, 0) + coalesce(CONFIRMED_FRAUD, 0) + coalesce(fraud_atk, 0) = 0
+  and coalesce(EXP_di_decision, 'DECLINE') = 'DECLINE'
+  and EXP_TU_RECONSIDER_FLAG_RESULT = 'SWAP_EXPERIAN_FOR_TRANSUNION'
+  and CREDITBUREAUSTRATEGY = 'EXP_WITH_TU_FULL'
+  and TU_DI_DECISION = 'ACCEPT'
+group by 1
+order by 1;
+
+--18
+select count(*),max(EVER_DPD_MAY18)
+from TDM_SANDBOX.SANDBOX.asd_2303_tu_analysis_sum
+where 1 = 1
+  and coalesce(conf_fraud, 0) + coalesce(CONFIRMED_FRAUD, 0) + coalesce(fraud_atk, 0) = 0
+  and coalesce(EXP_di_decision, 'DECLINE') = 'DECLINE'
+  and EXP_TU_RECONSIDER_FLAG_RESULT = 'SWAP_EXPERIAN_FOR_TRANSUNION'
+  and CREDITBUREAUSTRATEGY = 'EXP_WITH_TU_FULL'
+  and TU_DI_DECISION = 'ACCEPT'
+  and date_fund is not null;
+
+select --substring(DATE_FUND, 1, 7)                                      as date_mont,
+     --case when exp_category = '1 Global Policy Rules' then EXP_Subcategory else EXP_Category end as decline_reason,
+    count(*)
+     , sum(orig_prin)                                                             as sum_funded_amt
+     , avg(orig_prin)                                                             as avg_funded_amt
+     , avg(case when GROSS_INCOME > 0 then GROSS_INCOME else null end)            as avg_income
+     , sum(coalesce(EVER_DPD1P_CO_IND_daily, 0))                                  as ever_dpd1p_co_ind
+     , sum(coalesce(EVER_DPD1P_CO_prin_daily, 0)) / sum(orig_prin)                as ever_dpd1p_co_pri
+     , sum(ever_dpd30p_co_ind)                                                    as ever_dpd30p_co_ind
+     , sum(ever_dpd30p_co_prin) / sum(orig_prin)                                  as ever_dpd30p_co_prin
+     , sum(ACH_MOB1) / sum(case when DATE_FUND <= '2023-04-18' then 1 else 0 end) as ACH_MOB1
+     , sum(ACH_MOB3) / sum(case when DATE_FUND <= '2023-02-18' then 1 else 0 end) as ACH_MOB3
+from TDM_SANDBOX.SANDBOX.asd_2303_tu_analysis_sum
+where 1 = 1
+  and coalesce(conf_fraud, 0) + coalesce(CONFIRMED_FRAUD, 0) + coalesce(fraud_atk, 0) = 0
+  and coalesce(EXP_di_decision, 'DECLINE') = 'DECLINE'
+  and EXP_TU_RECONSIDER_FLAG_RESULT = 'SWAP_EXPERIAN_FOR_TRANSUNION'
+  and CREDITBUREAUSTRATEGY = 'EXP_WITH_TU_FULL'
+  and TU_DI_DECISION = 'ACCEPT'
+  and date_fund is not null
+group by 1
+order by 1;
+
+-- Profiles
+select app_type2,
+       count(*)                                                                                           as apps
+        ,
+       case
+           when app_type2 = 'Joint' then sum(case
+                                                 when least(TU_TU_FICO_SCORE_real, TU_TU_FICO_SCORE_real_cob) >= 300 and
+                                                      least(TU_TU_FICO_SCORE_real, TU_TU_FICO_SCORE_real_cob) <= 850
+                                                     then least(TU_TU_FICO_SCORE_real, TU_TU_FICO_SCORE_real_cob)
+                                                 else 0 end)
+           else sum(case
+                        when TU_TU_FICO_SCORE_real >= 300 and TU_TU_FICO_SCORE_real <= 850 then TU_TU_FICO_SCORE_real
+                        else 0 end) end                                                                   as TU_FICO,
+       case
+           when app_type2 = 'Joint' then sum(case
+                                                 when least(TU_TU_FICO_SCORE_real, TU_TU_FICO_SCORE_real_cob) >= 300 and
+                                                      least(TU_TU_FICO_SCORE_real, TU_TU_FICO_SCORE_real_cob) <= 850
+                                                     then 1
+                                                 else 0 end)
+           else sum(case
+                        when TU_TU_FICO_SCORE_real >= 300 and TU_TU_FICO_SCORE_real <= 850 then 1
+                        else 0 end) end                                                                   as TU_FICO_CT,
+       case
+           when app_type2 = 'Joint' then sum(case
+                                                 when least(EXP_Exp_FICO, EXP_Exp_FICO_cob) >= 300 and
+                                                      least(EXP_Exp_FICO, EXP_Exp_FICO_cob) <= 850
+                                                     then least(EXP_Exp_FICO, EXP_Exp_FICO_cob)
+                                                 else 0 end)
+           else sum(case
+                        when EXP_Exp_FICO >= 300 and EXP_Exp_FICO <= 850 then EXP_Exp_FICO
+                        else 0 end) end                                                                   as EXP_FICO,
+       case
+           when app_type2 = 'Joint' then sum(case
+                                                 when least(EXP_Exp_FICO, EXP_Exp_FICO_cob) >= 300 and
+                                                      least(EXP_Exp_FICO, EXP_Exp_FICO_cob) <= 850 then 1
+                                                 else 0 end)
+           else sum(case when EXP_Exp_FICO >= 300 and EXP_Exp_FICO <= 850 then 1 else 0 end) end          as EXP_FICO_CT,
+       case
+           when app_type2 = 'Joint' then sum(case
+                                                 when least(TU_TU_Gen3, TU_TU_Gen3_cob) >= 300 and
+                                                      least(TU_TU_Gen3, TU_TU_Gen3_cob) <= 850
+                                                     then least(TU_TU_Gen3, TU_TU_Gen3_cob)
+                                                 else 0 end)
+           else sum(case when TU_TU_Gen3 >= 300 and TU_TU_Gen3 <= 850 then TU_TU_Gen3 else 0 end) end     as TU_Gen3,
+       case
+           when app_type2 = 'Joint' then sum(case
+                                                 when least(TU_TU_Gen3, TU_TU_Gen3_cob) >= 300 and
+                                                      least(TU_TU_Gen3, TU_TU_Gen3_cob) <= 850 then 1
+                                                 else 0 end)
+           else sum(case when TU_TU_Gen3 >= 300 and TU_TU_Gen3 <= 850 then 1 else 0 end) end              as TU_Gen3_CT,
+       case
+           when app_type2 = 'Joint' then sum(case
+                                                 when least(EXP_Exp_Gen3, EXP_Exp_Gen3_cob) >= 300 and
+                                                      least(EXP_Exp_Gen3, EXP_Exp_Gen3_cob) <= 850
+                                                     then least(EXP_Exp_Gen3, EXP_Exp_Gen3_cob)
+                                                 else 0 end)
+           else sum(case
+                        when EXP_Exp_Gen3 >= 300 and EXP_Exp_Gen3 <= 850 then EXP_Exp_Gen3
+                        else 0 end) end                                                                   as EXP_GEN3,
+       case
+           when app_type2 = 'Joint' then sum(case
+                                                 when least(EXP_Exp_Gen3, EXP_Exp_Gen3_cob) >= 300 and
+                                                      least(EXP_Exp_Gen3, EXP_Exp_Gen3_cob) <= 850 then 1
+                                                 else 0 end)
+           else sum(case when EXP_Exp_Gen3 >= 300 and EXP_Exp_Gen3 <= 850 then 1 else 0 end) end          as EXP_GEN3_CT,
+       sum(case when TU_UBTI > 0 THEN TU_UBTI else 0 end)                                                 as TU_UBTI,
+       sum(case when TU_UBTI > 0 THEN 1 else 0 end)                                                       as TU_UBTI_CT,
+       sum(case when EXP_UBTI > 0 THEN EXP_UBTI else 0 end)                                               as EXP_UBTI,
+       sum(case when EXP_UBTI > 0 THEN 1 else 0 end)                                                      as EXP_UBTI_CT,
+       sum(case when TU_FCF > 0 THEN TU_FCF else 0 end)                                                   as TU_FCF,
+       sum(case when TU_FCF > 0 THEN 1 else 0 end)                                                        as TU_FCF_CT,
+       sum(case when EXP_FCF > 0 THEN EXP_FCF else 0 end)                                                 as EXP_FCF,
+       sum(case when EXP_FCF > 0 THEN 1 else 0 end)                                                       as EXP_FCF_CT,
+
+       case
+           when app_type2 = 'Joint' then sum(case
+                                                 when greatest(exp_ALL0416, exp_ALL0416_cob) between 0 and 90
+                                                     THEN least(exp_ALL0416, exp_ALL0416_cob)
+                                                 else 0 end)
+           else sum(case when exp_ALL0416 between 0 and 90 THEN exp_ALL0416 else 0 end) end               as EXP_open_trades,
+       case
+           when app_type2 = 'Joint' then sum(case
+                                                 when greatest(exp_ALL0416, exp_ALL0416_cob) between 0 and 90 THEN 1
+                                                 else 0 end)
+           else sum(case when exp_ALL0416 between 0 and 90 THEN 1 else 0 end) end                         as EXP_open_trades_CT,
+
+       case
+           when app_type2 = 'Joint' then sum(case
+                                                 when greatest(exp_IQT9420, exp_IQT9420_cob) between 0 and 90
+                                                     THEN greatest(exp_IQT9420, exp_IQT9420_cob)
+                                                 else 0 end)
+           else sum(case when exp_IQT9420 between 0 and 90 THEN exp_IQT9420 else 0 end) end               as EXP_credit_inquiries,
+       case
+           when app_type2 = 'Joint' then sum(case
+                                                 when greatest(exp_IQT9420, exp_IQT9420_cob) between 0 and 90 THEN 1
+                                                 else 0 end)
+           else sum(case when exp_IQT9420 between 0 and 90 THEN 1 else 0 end) end                         as EXP_credit_inquiries_CT,
+
+       case
+           when app_type2 = 'Joint' then sum(case
+                                                 when greatest(TU_TU_ALL0416_real, TU_TU_ALL0416_real_cob) between 0 and 90
+                                                     THEN least(TU_TU_ALL0416_real, TU_TU_ALL0416_real_cob)
+                                                 else 0 end)
+           else sum(case
+                        when TU_TU_ALL0416_real between 0 and 90 THEN TU_TU_ALL0416_real
+                        else 0 end) end                                                                   as TU_open_trades,
+       case
+           when app_type2 = 'Joint' then sum(case
+                                                 when greatest(TU_TU_ALL0416_real, TU_TU_ALL0416_real_cob) between 0 and 90
+                                                     THEN 1
+                                                 else 0 end)
+           else sum(case when TU_TU_ALL0416_real between 0 and 90 THEN 1 else 0 end) end                  as TU_open_trades_CT,
+
+       case
+           when app_type2 = 'Joint' then sum(case
+                                                 when greatest(TU_TU_IQT9420_real, TU_TU_IQT9420_real_cob) between 0 and 90
+                                                     THEN greatest(TU_TU_IQT9420_real, TU_TU_IQT9420_real_cob)
+                                                 else 0 end)
+           else sum(case
+                        when TU_TU_IQT9420_real between 0 and 90 THEN TU_TU_IQT9420_real
+                        else 0 end) end                                                                   as TU_credit_inquiries,
+       case
+           when app_type2 = 'Joint' then sum(case
+                                                 when greatest(TU_TU_IQT9420_real, TU_TU_IQT9420_real_cob) between 0 and 90
+                                                     THEN 1
+                                                 else 0 end)
+           else sum(case when TU_TU_IQT9420_real between 0 and 90 THEN 1 else 0 end) end                  as TU_credit_inquiries_CT
+
+from TDM_SANDBOX.SANDBOX.asd_2303_tu_analysis_sum
+where 1 = 1
+  and coalesce(conf_fraud, 0) + coalesce(CONFIRMED_FRAUD, 0) + coalesce(fraud_atk, 0) = 0
+  and coalesce(EXP_di_decision, 'DECLINE') = 'DECLINE'
+  and EXP_TU_RECONSIDER_FLAG_RESULT = 'SWAP_EXPERIAN_FOR_TRANSUNION'
+  and CREDITBUREAUSTRATEGY = 'EXP_WITH_TU_FULL'
+  and TU_DI_DECISION = 'ACCEPT'
+   --and date_fund is not null
+  and DATE_START <= '2023-05-15'
+group by 1;
+
+alter table TDM_SANDBOX.SANDBOX.asd_2303_tu_analysis_sum add exp_di_tier int,tu_di_tier int, di_tier int;
+
+update TDM_SANDBOX.SANDBOX.asd_2303_tu_analysis_sum as a
+set exp_di_tier=try_cast(di.uw_Result:applicationDecisionInfo:combinedTierNumber::string as int)
+from TDM_UNDERWRITING.CLEANSED.DIODES_OFFICIAL di
+where a.EXP_UW_RESULT_UUID = di.UW_RESULT_UUID;
+
+update TDM_SANDBOX.SANDBOX.asd_2303_tu_analysis_sum as a
+set tu_di_tier=try_cast(di.uw_Result:applicationDecisionInfo:combinedTierNumber::string as int)
+from TDM_UNDERWRITING.CLEANSED.DIODES_OFFICIAL di
+where a.TU_UW_RESULT_UUID = di.UW_RESULT_UUID;
+
+update TDM_SANDBOX.SANDBOX.asd_2303_tu_analysis_sum as a
+set di_tier=try_cast(di.uw_Result:applicationDecisionInfo:combinedTierNumber::string as int)
+from TDM_UNDERWRITING.CLEANSED.DIODES_OFFICIAL di
+where a.UW_RESULT_UUID = di.UW_RESULT_UUID;
+
+-- Approved atributes
+--686222,1274,42131,59717,583100
+select count(*)
+     , sum(case
+               when coalesce(EXP_di_decision, 'DECLINE') = 'DECLINE'
+                   and EXP_TU_RECONSIDER_FLAG_RESULT = 'SWAP_EXPERIAN_FOR_TRANSUNION'
+                   and CREDITBUREAUSTRATEGY = 'EXP_WITH_TU_FULL'
+                   and TU_DI_DECISION = 'ACCEPT'
+                   then 1
+               else 0 end) as tu_approved
+     , sum(case
+               when coalesce(EXP_di_decision, 'DECLINE') = 'ACCEPT'
+                   and coalesce(tier, exp_di_tier) = 8
+                   then 1
+               else 0 end) as exp_tier8
+     , sum(case
+               when coalesce(EXP_di_decision, 'DECLINE') = 'ACCEPT'
+                   and coalesce(tier, exp_di_tier) between 31 and 34
+                   then 1
+               else 0 end) as exp_prime
+     , sum(case
+               when coalesce(EXP_di_decision, 'DECLINE') = 'ACCEPT'
+                   and coalesce(tier, exp_di_tier, 34) not in (8, 31, 32, 33, 34)
+                   then 1
+               else 0 end) as exp_est
+from TDM_SANDBOX.SANDBOX.asd_2303_tu_analysis_sum
+where 1 = 1
+  and coalesce(conf_fraud, 0) + coalesce(CONFIRMED_FRAUD, 0) + coalesce(fraud_atk, 0) = 0
+  and coalesce(tier, exp_di_tier, TU_DI_TIER) <> 20
+  and (EXP_di_decision = 'ACCEPT' or TU_DI_DECISION = 'ACCEPT');
+
+
+-- Profiles Approved
+select segment,
+       sum(APPS)         as APPS,
+       case
+           when sum(TU_FICO_CT) > 0 then sum(TU_FICO) / sum(TU_FICO_CT)
+           else null end as TU_FICO,
+
+       case
+           when sum(EXP_FICO_CT) > 0 then sum(EXP_FICO) / sum(EXP_FICO_CT)
+           else null end as EXP_FICO,
+
+       case
+           when sum(TU_GEN3_CT) > 0 then sum(TU_GEN3) / sum(TU_GEN3_CT)
+           else null end as TU_GEN3,
+
+       case
+           when sum(EXP_GEN3_CT) > 0 then sum(EXP_GEN3) / sum(EXP_GEN3_CT)
+           else null end as EXP_GEN3,
+
+       case
+           when sum(TU_UBTI_CT) > 0 then sum(TU_UBTI) / sum(TU_UBTI_CT)
+           else null end as TU_UBTI,
+
+       case
+           when sum(EXP_UBTI_CT) > 0 then sum(EXP_UBTI) / sum(EXP_UBTI_CT)
+           else null end as EXP_UBTI,
+
+       case
+           when sum(TU_FCF_CT) > 0 then sum(TU_FCF) / sum(TU_FCF_CT)
+           else null end as TU_FCF,
+
+       case
+           when sum(EXP_FCF_CT) > 0 then sum(EXP_FCF) / sum(EXP_FCF_CT)
+           else null end as EXP_FCF,
+
+       case
+           when sum(EXP_OPEN_TRADES_CT) > 0 then sum(EXP_OPEN_TRADES) / sum(EXP_OPEN_TRADES_CT)
+           else null end as EXP_OPEN_TRADES,
+
+       case
+           when sum(EXP_CREDIT_INQUIRIES_CT) > 0 then sum(EXP_CREDIT_INQUIRIES) / sum(EXP_CREDIT_INQUIRIES_CT)
+           else null end as EXP_CREDIT_INQUIRIES,
+
+       case
+           when sum(TU_OPEN_TRADES_CT) > 0 then sum(TU_OPEN_TRADES) / sum(TU_OPEN_TRADES_CT)
+           else null end as TU_OPEN_TRADES,
+
+       case
+           when sum(TU_CREDIT_INQUIRIES_CT) > 0 then sum(TU_CREDIT_INQUIRIES) / sum(TU_CREDIT_INQUIRIES_CT)
+           else null end as TU_CREDIT_INQUIRIES
+
+
+from (
+         select case
+                    when coalesce(EXP_di_decision, 'DECLINE') = 'DECLINE'
+                        and EXP_TU_RECONSIDER_FLAG_RESULT = 'SWAP_EXPERIAN_FOR_TRANSUNION'
+                        and CREDITBUREAUSTRATEGY = 'EXP_WITH_TU_FULL'
+                        and TU_DI_DECISION = 'ACCEPT'
+                        then '3 TU Funded'
+
+                    when coalesce(EXP_di_decision, 'DECLINE') = 'ACCEPT'
+                        and coalesce(tier, exp_di_tier) = 8
+                        then '1 Tier 8'
+
+                    when coalesce(EXP_di_decision, 'DECLINE') = 'ACCEPT'
+                        and coalesce(tier, exp_di_tier) between 31 and 34
+                        then '2 Primer tiers'
+                    else '4 Others' end                                                                        as segment,
+                app_type2,
+                count(*)                                                                                       as apps,
+                case
+                    when app_type2 = 'Joint' then sum(case
+                                                          when least(TU_TU_FICO_SCORE_real, TU_TU_FICO_SCORE_real_cob) >=
+                                                               300 and
+                                                               least(TU_TU_FICO_SCORE_real, TU_TU_FICO_SCORE_real_cob) <=
+                                                               850
+                                                              then least(TU_TU_FICO_SCORE_real, TU_TU_FICO_SCORE_real_cob)
+                                                          else 0 end)
+                    else sum(case
+                                 when TU_TU_FICO_SCORE_real >= 300 and TU_TU_FICO_SCORE_real <= 850
+                                     then TU_TU_FICO_SCORE_real
+                                 else 0 end) end                                                               as TU_FICO,
+                case
+                    when app_type2 = 'Joint' then sum(case
+                                                          when least(TU_TU_FICO_SCORE_real, TU_TU_FICO_SCORE_real_cob) >=
+                                                               300 and
+                                                               least(TU_TU_FICO_SCORE_real, TU_TU_FICO_SCORE_real_cob) <=
+                                                               850
+                                                              then 1
+                                                          else 0 end)
+                    else sum(case
+                                 when TU_TU_FICO_SCORE_real >= 300 and TU_TU_FICO_SCORE_real <= 850 then 1
+                                 else 0 end) end                                                               as TU_FICO_CT,
+                case
+                    when app_type2 = 'Joint' then sum(case
+                                                          when least(EXP_Exp_FICO, EXP_Exp_FICO_cob) >= 300 and
+                                                               least(EXP_Exp_FICO, EXP_Exp_FICO_cob) <= 850
+                                                              then least(EXP_Exp_FICO, EXP_Exp_FICO_cob)
+                                                          else 0 end)
+                    else sum(case
+                                 when EXP_Exp_FICO >= 300 and EXP_Exp_FICO <= 850 then EXP_Exp_FICO
+                                 else 0 end) end                                                               as EXP_FICO,
+                case
+                    when app_type2 = 'Joint' then sum(case
+                                                          when least(EXP_Exp_FICO, EXP_Exp_FICO_cob) >= 300 and
+                                                               least(EXP_Exp_FICO, EXP_Exp_FICO_cob) <= 850 then 1
+                                                          else 0 end)
+                    else sum(case when EXP_Exp_FICO >= 300 and EXP_Exp_FICO <= 850 then 1 else 0 end) end      as EXP_FICO_CT,
+                case
+                    when app_type2 = 'Joint' then sum(case
+                                                          when least(TU_TU_Gen3, TU_TU_Gen3_cob) >= 300 and
+                                                               least(TU_TU_Gen3, TU_TU_Gen3_cob) <= 850
+                                                              then least(TU_TU_Gen3, TU_TU_Gen3_cob)
+                                                          else 0 end)
+                    else sum(case when TU_TU_Gen3 >= 300 and TU_TU_Gen3 <= 850 then TU_TU_Gen3 else 0 end) end as TU_Gen3,
+                case
+                    when app_type2 = 'Joint' then sum(case
+                                                          when least(TU_TU_Gen3, TU_TU_Gen3_cob) >= 300 and
+                                                               least(TU_TU_Gen3, TU_TU_Gen3_cob) <= 850 then 1
+                                                          else 0 end)
+                    else sum(case when TU_TU_Gen3 >= 300 and TU_TU_Gen3 <= 850 then 1 else 0 end) end          as TU_Gen3_CT,
+                case
+                    when app_type2 = 'Joint' then sum(case
+                                                          when least(EXP_Exp_Gen3, EXP_Exp_Gen3_cob) >= 300 and
+                                                               least(EXP_Exp_Gen3, EXP_Exp_Gen3_cob) <= 850
+                                                              then least(EXP_Exp_Gen3, EXP_Exp_Gen3_cob)
+                                                          else 0 end)
+                    else sum(case
+                                 when EXP_Exp_Gen3 >= 300 and EXP_Exp_Gen3 <= 850 then EXP_Exp_Gen3
+                                 else 0 end) end                                                               as EXP_GEN3,
+                case
+                    when app_type2 = 'Joint' then sum(case
+                                                          when least(EXP_Exp_Gen3, EXP_Exp_Gen3_cob) >= 300 and
+                                                               least(EXP_Exp_Gen3, EXP_Exp_Gen3_cob) <= 850 then 1
+                                                          else 0 end)
+                    else sum(case when EXP_Exp_Gen3 >= 300 and EXP_Exp_Gen3 <= 850 then 1 else 0 end) end      as EXP_GEN3_CT,
+                sum(case when TU_UBTI > 0 THEN TU_UBTI else 0 end)                                             as TU_UBTI,
+                sum(case when TU_UBTI > 0 THEN 1 else 0 end)                                                   as TU_UBTI_CT,
+                sum(case when EXP_UBTI > 0 THEN EXP_UBTI else 0 end)                                           as EXP_UBTI,
+                sum(case when EXP_UBTI > 0 THEN 1 else 0 end)                                                  as EXP_UBTI_CT,
+                sum(case when TU_FCF > 0 THEN TU_FCF else 0 end)                                               as TU_FCF,
+                sum(case when TU_FCF > 0 THEN 1 else 0 end)                                                    as TU_FCF_CT,
+                sum(case when EXP_FCF > 0 THEN EXP_FCF else 0 end)                                             as EXP_FCF,
+                sum(case when EXP_FCF > 0 THEN 1 else 0 end)                                                   as EXP_FCF_CT,
+
+                case
+                    when app_type2 = 'Joint' then sum(case
+                                                          when greatest(exp_ALL0416, exp_ALL0416_cob) between 0 and 90
+                                                              THEN least(exp_ALL0416, exp_ALL0416_cob)
+                                                          else 0 end)
+                    else sum(case when exp_ALL0416 between 0 and 90 THEN exp_ALL0416 else 0 end) end           as EXP_open_trades,
+                case
+                    when app_type2 = 'Joint' then sum(case
+                                                          when greatest(exp_ALL0416, exp_ALL0416_cob) between 0 and 90
+                                                              THEN 1
+                                                          else 0 end)
+                    else sum(case when exp_ALL0416 between 0 and 90 THEN 1 else 0 end) end                     as EXP_open_trades_CT,
+
+                case
+                    when app_type2 = 'Joint' then sum(case
+                                                          when greatest(exp_IQT9420, exp_IQT9420_cob) between 0 and 90
+                                                              THEN greatest(exp_IQT9420, exp_IQT9420_cob)
+                                                          else 0 end)
+                    else sum(case when exp_IQT9420 between 0 and 90 THEN exp_IQT9420 else 0 end) end           as EXP_credit_inquiries,
+                case
+                    when app_type2 = 'Joint' then sum(case
+                                                          when greatest(exp_IQT9420, exp_IQT9420_cob) between 0 and 90
+                                                              THEN 1
+                                                          else 0 end)
+                    else sum(case when exp_IQT9420 between 0 and 90 THEN 1 else 0 end) end                     as EXP_credit_inquiries_CT,
+
+                case
+                    when app_type2 = 'Joint' then sum(case
+                                                          when greatest(TU_TU_ALL0416_real, TU_TU_ALL0416_real_cob) between 0 and 90
+                                                              THEN least(TU_TU_ALL0416_real, TU_TU_ALL0416_real_cob)
+                                                          else 0 end)
+                    else sum(case
+                                 when TU_TU_ALL0416_real between 0 and 90 THEN TU_TU_ALL0416_real
+                                 else 0 end) end                                                               as TU_open_trades,
+                case
+                    when app_type2 = 'Joint' then sum(case
+                                                          when greatest(TU_TU_ALL0416_real, TU_TU_ALL0416_real_cob) between 0 and 90
+                                                              THEN 1
+                                                          else 0 end)
+                    else sum(case when TU_TU_ALL0416_real between 0 and 90 THEN 1 else 0 end) end              as TU_open_trades_CT,
+
+                case
+                    when app_type2 = 'Joint' then sum(case
+                                                          when greatest(TU_TU_IQT9420_real, TU_TU_IQT9420_real_cob) between 0 and 90
+                                                              THEN greatest(TU_TU_IQT9420_real, TU_TU_IQT9420_real_cob)
+                                                          else 0 end)
+                    else sum(case
+                                 when TU_TU_IQT9420_real between 0 and 90 THEN TU_TU_IQT9420_real
+                                 else 0 end) end                                                               as TU_credit_inquiries,
+                case
+                    when app_type2 = 'Joint' then sum(case
+                                                          when greatest(TU_TU_IQT9420_real, TU_TU_IQT9420_real_cob) between 0 and 90
+                                                              THEN 1
+                                                          else 0 end)
+                    else sum(case when TU_TU_IQT9420_real between 0 and 90 THEN 1 else 0 end) end              as TU_credit_inquiries_CT
+
+         from TDM_SANDBOX.SANDBOX.asd_2303_tu_analysis_sum
+         where 1 = 1
+           and coalesce(conf_fraud, 0) + coalesce(CONFIRMED_FRAUD, 0) + coalesce(fraud_atk, 0) = 0
+           and coalesce(tier, exp_di_tier, TU_DI_TIER) <> 20
+           and (EXP_di_decision = 'ACCEPT' or TU_DI_DECISION = 'ACCEPT')
+         group by 1, 2)
+group by 1
+order by 1;
+
+--Funded attributes
+
+--176568,260,8745,15332,152231
+select count(*)
+     , sum(case
+               when coalesce(EXP_di_decision, 'DECLINE') = 'DECLINE'
+                   and EXP_TU_RECONSIDER_FLAG_RESULT = 'SWAP_EXPERIAN_FOR_TRANSUNION'
+                   and CREDITBUREAUSTRATEGY = 'EXP_WITH_TU_FULL'
+                   and TU_DI_DECISION = 'ACCEPT'
+                   then 1
+               else 0 end) as tu_funded
+     , sum(case
+               when coalesce(EXP_di_decision, 'DECLINE') = 'ACCEPT'
+                   and tier = 8
+                   then 1
+               else 0 end) as exp_tier8
+     , sum(case
+               when coalesce(EXP_di_decision, 'DECLINE') = 'ACCEPT'
+                   and tier between 31 and 34
+                   then 1
+               else 0 end) as exp_prime
+     , sum(case
+               when coalesce(EXP_di_decision, 'DECLINE') = 'ACCEPT'
+                   and coalesce(tier, 34) not in (8, 31, 32, 33, 34)
+                   then 1
+               else 0 end) as exp_est
+from TDM_SANDBOX.SANDBOX.asd_2303_tu_analysis_sum
+where 1 = 1
+  and coalesce(conf_fraud, 0) + coalesce(CONFIRMED_FRAUD, 0) + coalesce(fraud_atk, 0) = 0
+  and date_fund is not null
+  and tier <> 20;
+
+-- Profiles Funded
+select segment,
+       sum(APPS)         as APPS,
+       case
+           when sum(TU_FICO_CT) > 0 then sum(TU_FICO) / sum(TU_FICO_CT)
+           else null end as TU_FICO,
+
+       case
+           when sum(EXP_FICO_CT) > 0 then sum(EXP_FICO) / sum(EXP_FICO_CT)
+           else null end as EXP_FICO,
+
+       case
+           when sum(TU_GEN3_CT) > 0 then sum(TU_GEN3) / sum(TU_GEN3_CT)
+           else null end as TU_GEN3,
+
+       case
+           when sum(EXP_GEN3_CT) > 0 then sum(EXP_GEN3) / sum(EXP_GEN3_CT)
+           else null end as EXP_GEN3,
+
+       case
+           when sum(TU_UBTI_CT) > 0 then sum(TU_UBTI) / sum(TU_UBTI_CT)
+           else null end as TU_UBTI,
+
+       case
+           when sum(EXP_UBTI_CT) > 0 then sum(EXP_UBTI) / sum(EXP_UBTI_CT)
+           else null end as EXP_UBTI,
+
+       case
+           when sum(TU_FCF_CT) > 0 then sum(TU_FCF) / sum(TU_FCF_CT)
+           else null end as TU_FCF,
+
+       case
+           when sum(EXP_FCF_CT) > 0 then sum(EXP_FCF) / sum(EXP_FCF_CT)
+           else null end as EXP_FCF,
+
+       case
+           when sum(EXP_OPEN_TRADES_CT) > 0 then sum(EXP_OPEN_TRADES) / sum(EXP_OPEN_TRADES_CT)
+           else null end as EXP_OPEN_TRADES,
+
+       case
+           when sum(EXP_CREDIT_INQUIRIES_CT) > 0 then sum(EXP_CREDIT_INQUIRIES) / sum(EXP_CREDIT_INQUIRIES_CT)
+           else null end as EXP_CREDIT_INQUIRIES,
+
+       case
+           when sum(TU_OPEN_TRADES_CT) > 0 then sum(TU_OPEN_TRADES) / sum(TU_OPEN_TRADES_CT)
+           else null end as TU_OPEN_TRADES,
+
+       case
+           when sum(TU_CREDIT_INQUIRIES_CT) > 0 then sum(TU_CREDIT_INQUIRIES) / sum(TU_CREDIT_INQUIRIES_CT)
+           else null end as TU_CREDIT_INQUIRIES
+
+
+from (
+         select case
+                    when coalesce(EXP_di_decision, 'DECLINE') = 'DECLINE'
+                        and EXP_TU_RECONSIDER_FLAG_RESULT = 'SWAP_EXPERIAN_FOR_TRANSUNION'
+                        and CREDITBUREAUSTRATEGY = 'EXP_WITH_TU_FULL'
+                        and TU_DI_DECISION = 'ACCEPT'
+                        then '3 TU Funded'
+
+                    when coalesce(EXP_di_decision, 'DECLINE') = 'ACCEPT'
+                        and tier = 8
+                        then '1 Tier 8'
+
+                    when coalesce(EXP_di_decision, 'DECLINE') = 'ACCEPT'
+                        and tier between 31 and 34
+                        then '2 Primer tiers'
+                    else '4 Others' end                                                                        as segment,
+                app_type2,
+                count(*)                                                                                       as apps,
+                case
+                    when app_type2 = 'Joint' then sum(case
+                                                          when least(TU_TU_FICO_SCORE_real, TU_TU_FICO_SCORE_real_cob) >=
+                                                               300 and
+                                                               least(TU_TU_FICO_SCORE_real, TU_TU_FICO_SCORE_real_cob) <=
+                                                               850
+                                                              then least(TU_TU_FICO_SCORE_real, TU_TU_FICO_SCORE_real_cob)
+                                                          else 0 end)
+                    else sum(case
+                                 when TU_TU_FICO_SCORE_real >= 300 and TU_TU_FICO_SCORE_real <= 850
+                                     then TU_TU_FICO_SCORE_real
+                                 else 0 end) end                                                               as TU_FICO,
+                case
+                    when app_type2 = 'Joint' then sum(case
+                                                          when least(TU_TU_FICO_SCORE_real, TU_TU_FICO_SCORE_real_cob) >=
+                                                               300 and
+                                                               least(TU_TU_FICO_SCORE_real, TU_TU_FICO_SCORE_real_cob) <=
+                                                               850
+                                                              then 1
+                                                          else 0 end)
+                    else sum(case
+                                 when TU_TU_FICO_SCORE_real >= 300 and TU_TU_FICO_SCORE_real <= 850 then 1
+                                 else 0 end) end                                                               as TU_FICO_CT,
+                case
+                    when app_type2 = 'Joint' then sum(case
+                                                          when least(EXP_Exp_FICO, EXP_Exp_FICO_cob) >= 300 and
+                                                               least(EXP_Exp_FICO, EXP_Exp_FICO_cob) <= 850
+                                                              then least(EXP_Exp_FICO, EXP_Exp_FICO_cob)
+                                                          else 0 end)
+                    else sum(case
+                                 when EXP_Exp_FICO >= 300 and EXP_Exp_FICO <= 850 then EXP_Exp_FICO
+                                 else 0 end) end                                                               as EXP_FICO,
+                case
+                    when app_type2 = 'Joint' then sum(case
+                                                          when least(EXP_Exp_FICO, EXP_Exp_FICO_cob) >= 300 and
+                                                               least(EXP_Exp_FICO, EXP_Exp_FICO_cob) <= 850 then 1
+                                                          else 0 end)
+                    else sum(case when EXP_Exp_FICO >= 300 and EXP_Exp_FICO <= 850 then 1 else 0 end) end      as EXP_FICO_CT,
+                case
+                    when app_type2 = 'Joint' then sum(case
+                                                          when least(TU_TU_Gen3, TU_TU_Gen3_cob) >= 300 and
+                                                               least(TU_TU_Gen3, TU_TU_Gen3_cob) <= 850
+                                                              then least(TU_TU_Gen3, TU_TU_Gen3_cob)
+                                                          else 0 end)
+                    else sum(case when TU_TU_Gen3 >= 300 and TU_TU_Gen3 <= 850 then TU_TU_Gen3 else 0 end) end as TU_Gen3,
+                case
+                    when app_type2 = 'Joint' then sum(case
+                                                          when least(TU_TU_Gen3, TU_TU_Gen3_cob) >= 300 and
+                                                               least(TU_TU_Gen3, TU_TU_Gen3_cob) <= 850 then 1
+                                                          else 0 end)
+                    else sum(case when TU_TU_Gen3 >= 300 and TU_TU_Gen3 <= 850 then 1 else 0 end) end          as TU_Gen3_CT,
+                case
+                    when app_type2 = 'Joint' then sum(case
+                                                          when least(EXP_Exp_Gen3, EXP_Exp_Gen3_cob) >= 300 and
+                                                               least(EXP_Exp_Gen3, EXP_Exp_Gen3_cob) <= 850
+                                                              then least(EXP_Exp_Gen3, EXP_Exp_Gen3_cob)
+                                                          else 0 end)
+                    else sum(case
+                                 when EXP_Exp_Gen3 >= 300 and EXP_Exp_Gen3 <= 850 then EXP_Exp_Gen3
+                                 else 0 end) end                                                               as EXP_GEN3,
+                case
+                    when app_type2 = 'Joint' then sum(case
+                                                          when least(EXP_Exp_Gen3, EXP_Exp_Gen3_cob) >= 300 and
+                                                               least(EXP_Exp_Gen3, EXP_Exp_Gen3_cob) <= 850 then 1
+                                                          else 0 end)
+                    else sum(case when EXP_Exp_Gen3 >= 300 and EXP_Exp_Gen3 <= 850 then 1 else 0 end) end      as EXP_GEN3_CT,
+                sum(case when TU_UBTI > 0 THEN TU_UBTI else 0 end)                                             as TU_UBTI,
+                sum(case when TU_UBTI > 0 THEN 1 else 0 end)                                                   as TU_UBTI_CT,
+                sum(case when EXP_UBTI > 0 THEN EXP_UBTI else 0 end)                                           as EXP_UBTI,
+                sum(case when EXP_UBTI > 0 THEN 1 else 0 end)                                                  as EXP_UBTI_CT,
+                sum(case when TU_FCF > 0 THEN TU_FCF else 0 end)                                               as TU_FCF,
+                sum(case when TU_FCF > 0 THEN 1 else 0 end)                                                    as TU_FCF_CT,
+                sum(case when EXP_FCF > 0 THEN EXP_FCF else 0 end)                                             as EXP_FCF,
+                sum(case when EXP_FCF > 0 THEN 1 else 0 end)                                                   as EXP_FCF_CT,
+
+                case
+                    when app_type2 = 'Joint' then sum(case
+                                                          when greatest(exp_ALL0416, exp_ALL0416_cob) between 0 and 90
+                                                              THEN least(exp_ALL0416, exp_ALL0416_cob)
+                                                          else 0 end)
+                    else sum(case when exp_ALL0416 between 0 and 90 THEN exp_ALL0416 else 0 end) end           as EXP_open_trades,
+                case
+                    when app_type2 = 'Joint' then sum(case
+                                                          when greatest(exp_ALL0416, exp_ALL0416_cob) between 0 and 90
+                                                              THEN 1
+                                                          else 0 end)
+                    else sum(case when exp_ALL0416 between 0 and 90 THEN 1 else 0 end) end                     as EXP_open_trades_CT,
+
+                case
+                    when app_type2 = 'Joint' then sum(case
+                                                          when greatest(exp_IQT9420, exp_IQT9420_cob) between 0 and 90
+                                                              THEN greatest(exp_IQT9420, exp_IQT9420_cob)
+                                                          else 0 end)
+                    else sum(case when exp_IQT9420 between 0 and 90 THEN exp_IQT9420 else 0 end) end           as EXP_credit_inquiries,
+                case
+                    when app_type2 = 'Joint' then sum(case
+                                                          when greatest(exp_IQT9420, exp_IQT9420_cob) between 0 and 90
+                                                              THEN 1
+                                                          else 0 end)
+                    else sum(case when exp_IQT9420 between 0 and 90 THEN 1 else 0 end) end                     as EXP_credit_inquiries_CT,
+
+                case
+                    when app_type2 = 'Joint' then sum(case
+                                                          when greatest(TU_TU_ALL0416_real, TU_TU_ALL0416_real_cob) between 0 and 90
+                                                              THEN least(TU_TU_ALL0416_real, TU_TU_ALL0416_real_cob)
+                                                          else 0 end)
+                    else sum(case
+                                 when TU_TU_ALL0416_real between 0 and 90 THEN TU_TU_ALL0416_real
+                                 else 0 end) end                                                               as TU_open_trades,
+                case
+                    when app_type2 = 'Joint' then sum(case
+                                                          when greatest(TU_TU_ALL0416_real, TU_TU_ALL0416_real_cob) between 0 and 90
+                                                              THEN 1
+                                                          else 0 end)
+                    else sum(case when TU_TU_ALL0416_real between 0 and 90 THEN 1 else 0 end) end              as TU_open_trades_CT,
+
+                case
+                    when app_type2 = 'Joint' then sum(case
+                                                          when greatest(TU_TU_IQT9420_real, TU_TU_IQT9420_real_cob) between 0 and 90
+                                                              THEN greatest(TU_TU_IQT9420_real, TU_TU_IQT9420_real_cob)
+                                                          else 0 end)
+                    else sum(case
+                                 when TU_TU_IQT9420_real between 0 and 90 THEN TU_TU_IQT9420_real
+                                 else 0 end) end                                                               as TU_credit_inquiries,
+                case
+                    when app_type2 = 'Joint' then sum(case
+                                                          when greatest(TU_TU_IQT9420_real, TU_TU_IQT9420_real_cob) between 0 and 90
+                                                              THEN 1
+                                                          else 0 end)
+                    else sum(case when TU_TU_IQT9420_real between 0 and 90 THEN 1 else 0 end) end              as TU_credit_inquiries_CT
+
+         from TDM_SANDBOX.SANDBOX.asd_2303_tu_analysis_sum
+         where 1 = 1
+           and coalesce(conf_fraud, 0) + coalesce(CONFIRMED_FRAUD, 0) + coalesce(fraud_atk, 0) = 0
+           and date_fund is not null
+           and coalesce(tier, 20) <> 20
+         group by 1, 2)
+group by 1
+order by 1;
+
+-- VOI Waterfall
+
+select VOI_METHOD_NEW, count(*) as loans
+from TDM_SANDBOX.SANDBOX.asd_2303_tu_analysis_sum
+where 1 = 1
+  and coalesce(conf_fraud, 0) + coalesce(CONFIRMED_FRAUD, 0) + coalesce(fraud_atk, 0) = 0
+  and coalesce(EXP_di_decision, 'DECLINE') = 'DECLINE'
+  and EXP_TU_RECONSIDER_FLAG_RESULT = 'SWAP_EXPERIAN_FOR_TRANSUNION'
+  and CREDITBUREAUSTRATEGY = 'EXP_WITH_TU_FULL'
+  and TU_DI_DECISION = 'ACCEPT'
+  and date_fund is not null
+group by 1
+order by 1;
+
+-- Additional comparison
+--260,14,5.38,6.25
+select count(*) as apps,
+       sum(EVER_DPD1P_CO_IND_daily),
+       round((sum(EVER_DPD1P_CO_IND_daily) / count(*)) * 100, 2),
+       round((sum(EVER_DPD1P_CO_PRIN_daily) / sum(ORIG_PRIN)) * 100, 2)
+from TDM_SANDBOX.SANDBOX.asd_2303_tu_analysis_sum
+where 1 = 1
+  and coalesce(conf_fraud, 0) + coalesce(CONFIRMED_FRAUD, 0) + coalesce(fraud_atk, 0) = 0
+  and coalesce(EXP_di_decision, 'DECLINE') = 'DECLINE'
+  and EXP_TU_RECONSIDER_FLAG_RESULT = 'SWAP_EXPERIAN_FOR_TRANSUNION'
+  and CREDITBUREAUSTRATEGY = 'EXP_WITH_TU_FULL'
+  and TU_DI_DECISION = 'ACCEPT'
+  and date_fund is not null;
+
+--1 Tier 8,8745,510,5.83,5.87
+--2 Prime,2506,100,3.99,4.04
+select case when coalesce(tier, exp_di_tier) = 8 then '1 Tier 8' else '2 Prime' end as type,
+       count(*)                                                                     as apps,
+       sum(EVER_DPD1P_CO_IND_daily),
+       round((sum(EVER_DPD1P_CO_IND_daily) / count(*)) * 100, 2),
+       round((sum(EVER_DPD1P_CO_PRIN_daily) / sum(ORIG_PRIN)) * 100, 2)
+from TDM_SANDBOX.SANDBOX.asd_2303_tu_analysis_sum
+where 1 = 1
+  and coalesce(conf_fraud, 0) + coalesce(CONFIRMED_FRAUD, 0) + coalesce(fraud_atk, 0) = 0
+  and coalesce(EXP_di_decision, 'DECLINE') = 'ACCEPT'
+  and coalesce(tier, exp_di_tier) in (8, 31, 34, 33, 34)
+  and date_fund is not null
+group by 1
+order by 1;
