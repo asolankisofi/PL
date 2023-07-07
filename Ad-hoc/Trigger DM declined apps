@@ -1,0 +1,456 @@
+-- PL PS TRIGGER PERFORMANCE
+create or replace table TDM_SANDBOX.SANDBOX.asd_2306_Trigger_DM_declined as
+SELECT a.*,
+       b.USER_ID                                                           AS DM_MAIL_USER_ID,
+       b.ACTUAL_MAIL_DROP_DATE,
+       b.TRIGGER_DATE                                                      AS MERKLE_TRIGGER_DATE,
+       c.*,
+       CASE WHEN d.USER_ID IS NOT NULL THEN 'MEMBER' ELSE 'NON-MEMBER' END AS AUDIENCE_TYPE,
+       e.*,
+       DATEDIFF('DAY', b.ACTUAL_MAIL_DROP_DATE, e.DATE_START)              AS DAYS_TO_RESPONSE_AFTER_DM,
+       DATEDIFF('DAY', c.NYT_TRIGGER_DATE, e.DATE_START)                   AS DAYS_TO_RESPONSE_AFTER_TRIGGER
+FROM (SELECT BUSINESS_APPLICATION_ID, APPLICATION_ID, USER_ID, PROD_CELL_NUM, APP_CREATED_DATE, PROMOTION_HIST_KEY
+      FROM TDM_MARKETING.MARKETING_STAGE.DM_MB_DATA
+      WHERE PROD_CELL_NUM LIKE 'PT%') a
+         LEFT JOIN
+     (SELECT * FROM TDM_SANDBOX.EXL_MARKETING_STAGE.MDS_ALL_TRIGGERS_MERKLE_DM) b
+     ON a.PROMOTION_HIST_KEY = b.PROMOTION_HIST_KEY
+         LEFT JOIN
+     (SELECT EVENT_PARTY_ID                                                                        AS PARTY_ID,
+             DATE,
+             DATE(convert_timezone('UTC', 'America/New_York', to_timestamp(KAFKA_EPOCHMS / 1000))) AS NYT_TRIGGER_DATE,
+             CUSTOMER_SEGMENT_CD                                                                   AS SEGMENT,
+             TRY_TO_NUMBER(CUSTOMER_VANTAGE_SCORE)                                                    VANTAGE_SCORE,
+             CASE
+                 WHEN TRY_TO_NUMBER(CUSTOMER_VANTAGE_SCORE) IS NULL THEN 'A. MISSING'
+                 WHEN CUSTOMER_VANTAGE_SCORE < 300 OR CUSTOMER_VANTAGE_SCORE > 850 THEN 'B. INVALID'
+                 WHEN CUSTOMER_VANTAGE_SCORE < 660 AND CUSTOMER_VANTAGE_SCORE >= 300 THEN 'C. 300-660'
+                 WHEN CUSTOMER_VANTAGE_SCORE < 680 AND CUSTOMER_VANTAGE_SCORE >= 660 THEN 'D. 660-680'
+                 WHEN CUSTOMER_VANTAGE_SCORE < 720 AND CUSTOMER_VANTAGE_SCORE >= 680 THEN 'E. 680-720'
+                 WHEN CUSTOMER_VANTAGE_SCORE < 760 AND CUSTOMER_VANTAGE_SCORE >= 720 THEN 'F. 720-760'
+                 WHEN CUSTOMER_VANTAGE_SCORE < 800 AND CUSTOMER_VANTAGE_SCORE >= 760 THEN 'G. 760-800'
+                 WHEN CUSTOMER_VANTAGE_SCORE <= 850 AND CUSTOMER_VANTAGE_SCORE >= 800 THEN 'H. 800-850'
+                 END                                                                               AS TRIGGERED_VANTAGE_BUCKET,
+             TRY_TO_NUMBER(CUSTOMER_INCOME_INSIGHT_SCORE)                                             INCOME_INSIGHT_SCORE,
+             CASE
+                 WHEN TRY_TO_NUMBER(CUSTOMER_INCOME_INSIGHT_SCORE) IS NULL THEN 'A. MISSING'
+                 WHEN CUSTOMER_INCOME_INSIGHT_SCORE < 70 AND CUSTOMER_INCOME_INSIGHT_SCORE > 0 THEN 'B.<70k'
+                 WHEN CUSTOMER_INCOME_INSIGHT_SCORE < 100 AND CUSTOMER_INCOME_INSIGHT_SCORE >= 70 THEN 'C. 70-100K'
+                 WHEN CUSTOMER_INCOME_INSIGHT_SCORE < 150 AND CUSTOMER_INCOME_INSIGHT_SCORE >= 100 THEN 'D. 100-150K'
+                 WHEN CUSTOMER_INCOME_INSIGHT_SCORE < 200 AND CUSTOMER_INCOME_INSIGHT_SCORE >= 150 THEN 'E. 150-200K'
+                 WHEN CUSTOMER_INCOME_INSIGHT_SCORE < 250 AND CUSTOMER_INCOME_INSIGHT_SCORE >= 200 THEN 'F. 200-250K'
+                 WHEN CUSTOMER_INCOME_INSIGHT_SCORE < 300 AND CUSTOMER_INCOME_INSIGHT_SCORE >= 250 THEN 'G. 250-300K'
+                 WHEN CUSTOMER_INCOME_INSIGHT_SCORE >= 300 THEN 'H. >=300K'
+                 END                                                                               AS TRIGGER_INCOME_BUCKET,
+             TRY_TO_NUMBER(CUSTOMER_DEBT_TO_INCOME_RATIO)                                          AS DTI,
+             TRY_TO_NUMBER(CUSTOMER_TOTAL_BALANCE)                                                    TOTAL_BALANCE,
+             CASE
+                 WHEN CAST(CUSTOMER_PL_BALANCE AS INTEGER) > 999999990 THEN 0
+                 ELSE CAST(CUSTOMER_PL_BALANCE AS INTEGER) END                                     AS PL_BALANCE,
+             CASE
+                 WHEN CAST(CUSTOMER_PL_INTEREST_RATE AS INTEGER) > 9990 THEN 0
+                 ELSE (CAST(CUSTOMER_PL_INTEREST_RATE AS INTEGER)) / 100 END                       AS PL_INTEREST_RATE,
+             INQUIRY_INFORMATION_KOB                                                               AS KOB,
+             INQUIRY_INFORMATION_PURPOSE_TYPE                                                      AS PURPOSE_TYPE
+      FROM TDM_MARTECH.CLEANSED.EXPERIAN_REALTIME_ALL_TRIGGERS
+      WHERE EVENT_DISPLAY_CODE = 'INSTI') c
+     ON b.USER_ID = c.PARTY_ID
+         AND (DATEDIFF('DAY', c.NYT_TRIGGER_DATE, b.TRIGGER_DATE) >= -2
+             AND DATEDIFF('DAY', c.NYT_TRIGGER_DATE, b.TRIGGER_DATE) <= 2)
+         LEFT JOIN
+     (SELECT USER_ID, REPORTING_DATE
+      FROM TDM_MEMBER.MEMBER.MEMBER_SUMMARY_DAILY_ALL
+      WHERE REPORTING_DATE IS NOT NULL
+        AND USER_ID > 0) d
+     ON CAST(c.PARTY_ID AS INTEGER) = CAST(d.USER_ID AS INTEGER)
+         AND DATE(c.NYT_TRIGGER_DATE) = DATE(d.REPORTING_DATE)
+         LEFT JOIN
+     (SELECT ID,
+             APPLICANT_ID,
+             DW_APPLICATION_ID,
+             DATE_START,
+             DS_MONTH,
+             "Start",
+             SOFI_QUALITY_START,
+             SUBMIT,
+             DOC_UPLOAD,
+             FUNDED,
+             REQUESTED_AMOUNT,
+             REQUESTED_AMOUNT_BAND,
+             LOAN_AMT,
+             LOAN_AMT_BAND,
+             PURPOSE,
+             FICO,
+             FICO_BUCKET,
+             VANTAGE,
+             VANTAGE_BUCKET,
+             GROSS_INCOME,
+             INCOME_BUCKET,
+             FCF_PRE,
+             FCF_BAND,
+             CHANNEL_GROUPING,
+             CHANNEL_GROUPING1,
+             FINAL_CHANNEL,
+             FINAL_SUBCHANNEL,
+             DECLINE_REASON,
+             DECISION_CODE,
+             REASON
+      FROM TDM_MARKETING.MARKETING_STAGE.MDS_PL_APPLICATION_FUNNEL
+      WHERE YEAR(DATE_START) >= 2022) e
+     ON CAST(a.BUSINESS_APPLICATION_ID AS BIGINT) = CAST(e.ID AS BIGINT);
+
+show columns on TDM_MARKETING.MARKETING_STAGE.MDS_PL_APPLICATION_FUNNEL;
+
+------------------------------------
+------------------------------------
+------------------------------------
+
+select trigger_month,
+      -- select
+       count(*) as apps, sum(coalesce(SOFI_QUALITY_START, 0)) as SOFI_QUALITY_START, sum(coalesce(SOFI_QUALITY_START, 0))/count(*) as apr
+from (
+         select APPLICATION_ID,
+                substring(NYT_TRIGGER_DATE, 1, 7) as trigger_month,
+                VANTAGE_SCORE,
+                TRIGGERED_VANTAGE_BUCKET,
+                TRIGGER_INCOME_BUCKET,
+                DECLINE_REASON,
+                DECISION_CODE,
+                SOFI_QUALITY_START,
+                fico,
+                FICO_BUCKET
+         from TDM_SANDBOX.SANDBOX.asd_2306_Trigger_DM_declined
+         where trigger_month not in ('2022-07')-- and NYT_TRIGGER_DATE<'2023-03-01'
+          -- and APPLICATION_ID in ('19970672','19401908') or DW_APPLICATION_ID in ('19970672','19401908')
+    --and fico is not null
+     )
+group by 1
+order by 1;
+
+-- Final
+
+select *
+from TDM_SANDBOX.SANDBOX.asd_2306_Trigger_DM_declined
+where NYT_TRIGGER_DATE >= '2023-05-01'
+  and SOFI_QUALITY_START = 0;
+
+--11743,11708
+select count(*),count(distinct id)
+from TDM_SANDBOX.SANDBOX.asd_2306_Trigger_DM_declined
+where NYT_TRIGGER_DATE >= '2022-08-01'
+  and SOFI_QUALITY_START = 0;
+
+create or replace table TDM_SANDBOX.SANDBOX.asd_2306_Trigger_DM_declined2 as
+with base_data as (
+    select *
+    from (
+             select a.id
+                  , di.UW_REQUEST_UUID
+                  , di.UW_RESULT_UUID
+                  , di.DATE_OF_UNDERWRITING
+                  , di.UW_RESULT:applicationDecisionInfo:applicationType::string                                                 as app_type
+                  , try_cast(di.UW_RESULT:applicationDecisionInfo:individualDecisionInfos[0]:underwritingFico::string as int)    as uw_fico_pri
+                  , try_cast(di.UW_RESULT:applicationDecisionInfo:individualDecisionInfos[1]:underwritingFico::string as int)    as uw_fico_cob
+                  , try_cast(coalesce(
+                     di.UW_REQUEST:application:applicantsList[0]:creditPull:attributes:SOFIINQ: value::string,
+                     di.UW_REQUEST:application:applicantsList[0]:creditPull:attributes:SOFIINQ:originalValue::string) as bigint) as SOFIINQ_pri
+                  , try_cast(coalesce(
+                     di.UW_REQUEST:application:applicantsList[1]:creditPull:attributes:SOFIINQ: value::string,
+                     di.UW_REQUEST:application:applicantsList[1]:creditPull:attributes:SOFIINQ:originalValue::string) as bigint) as SOFIINQ_cob
+                  , di.UW_RESULT:workflowVersionUsed::string                                                                     as workflow_version_used
+                  , di.UW_REQUEST:creditBureauStrategy::string                                                                   as creditBureauStrategy
+                  , di.UW_RESULT:applicationDecisionInfo:decision::string                                                        as di_decision
+                  , di.UW_RESULT:applicationDecisionInfo:tierSegment::string                                                     as tier_segment
+                  , try_cast(di.uw_Result:applicationDecisionInfo:combinedTierNumber::string as int)                             as tier
+                  , try_cast(di.UW_REQUEST:application:applicantsList[0]:gen3Score::string as int)                               as gen3_score_pri
+                  , try_cast(di.UW_REQUEST:application:applicantsList[1]:gen3Score::string as int)                               as gen3_score_cob
+             from TDM_SANDBOX.SANDBOX.asd_2306_Trigger_DM_declined a
+                      inner join TDM_RISK_MGMT_HUB.MODELED.applications_file af on a.id = af.id
+                      inner join TDM_UNDERWRITING.CLEANSED.DIODES_OFFICIAL di
+                                 on a.ID = di.TARGET_ID and di.TARGET_TYPE = 'APP'
+             where af.APPLICATION_TYPE = 'PL'
+               and ((af.COBORROWER_INDICATOR = 'N' and app_type = 'Single')
+                 or
+                    (af.COBORROWER_INDICATOR = 'Y' and app_type = 'Joint'))
+         )
+        qualify row_number() over (partition by ID order by DATE_OF_UNDERWRITING) = 1
+)
+select a.*,
+       b.UW_REQUEST_UUID,
+       b.UW_RESULT_UUID,
+       b.DATE_OF_UNDERWRITING,
+       b.workflow_version_used,
+       b.creditBureauStrategy,
+       b.di_decision,
+       b.uw_fico_pri,
+       b.uw_fico_cob,
+       b.SOFIINQ_pri,
+       b.SOFIINQ_cob,
+       b.tier_segment,
+       b.tier,
+       b.gen3_score_pri,
+       b.gen3_score_cob
+from TDM_SANDBOX.SANDBOX.asd_2306_Trigger_DM_declined a
+         left join base_data b on a.id = b.id;
+
+alter table TDM_SANDBOX.SANDBOX.asd_2306_Trigger_DM_declined2
+    add SOFIINQ bigint, uw_fico bigint, gen3_score bigint;
+
+update TDM_SANDBOX.SANDBOX.asd_2306_Trigger_DM_declined2
+set SOFIINQ=greatest(coalesce(SOFIINQ_pri, SOFIINQ_cob), coalesce(SOFIINQ_cob, SOFIINQ_pri)),
+    UW_FICO=least(coalesce(UW_FICO_pri, UW_FICO_cob), coalesce(UW_FICO_cob, UW_FICO_pri)),
+    gen3_score=least(coalesce(gen3_score_pri, gen3_score_cob), coalesce(gen3_score_cob, gen3_score_pri));
+
+--11743,11708
+select count(*),count(distinct id)
+from TDM_SANDBOX.SANDBOX.asd_2306_Trigger_DM_declined2
+where NYT_TRIGGER_DATE >= '2022-08-01'
+  and SOFI_QUALITY_START = 0;
+
+select count(*)                                        as apps,
+       sum(coalesce(SOFI_QUALITY_START, 0))            as SOFI_QUALITY_START,
+       sum(coalesce(SOFI_QUALITY_START, 0)) / count(*) as apr
+from TDM_SANDBOX.SANDBOX.asd_2306_Trigger_DM_declined2
+where substring(NYT_TRIGGER_DATE, 1, 7) not in ('2022-07')
+  and sofiinq < 3;
+
+select DECLINE_REASON,count(*)                                        as apps,
+       count(*)/140.61 as share
+from TDM_SANDBOX.SANDBOX.asd_2306_Trigger_DM_declined2
+where substring(NYT_TRIGGER_DATE, 1, 7) not in ('2022-07')
+ -- and NYT_TRIGGER_DATE<'2023-03-01'
+and sofiinq < 3
+  group by 1
+order by 1;
+
+select DECISION_CODE,count(*)                                        as apps,
+       count(*)/33.66 as share
+from TDM_SANDBOX.SANDBOX.asd_2306_Trigger_DM_declined2
+where substring(NYT_TRIGGER_DATE, 1, 7) not in ('2022-07')
+--  and NYT_TRIGGER_DATE<'2023-03-01'
+and sofiinq < 3
+and DECLINE_REASON='05 Gen3: Global Policy Rules'
+  group by 1
+order by 1;
+
+
+select case when SOFI_QUALITY_START = 1 then 'Approved' else 'Declined' end as decision,
+       tier_segment,
+       tier,
+       count(*)                                                             as apps,
+       min(GEN3_SCORE)                                                      as min_GEN3_SCORE,
+       min(UW_FICO)                                                         as min_UW_FICO
+from TDM_SANDBOX.SANDBOX.asd_2306_Trigger_DM_declined2
+where NYT_TRIGGER_DATE >= '2022-08-01'
+  and SOFIINQ >= 3
+group by 1, 2, 3
+order by 1, 2, 3;
+
+select workflow_version_used,
+       tier_segment,
+       tier,
+       count(*)        as apps,
+       min(GEN3_SCORE) as min_GEN3_SCORE,
+       min(UW_FICO)    as min_UW_FICO,
+       min(DATE_START) as min_DATE_START,
+       max(DATE_START) as max_DATE_START
+from TDM_SANDBOX.SANDBOX.asd_2306_Trigger_DM_declined2
+where NYT_TRIGGER_DATE >= '2022-08-01'
+  and SOFIINQ >= 3
+  and SOFI_QUALITY_START = 1
+  and TIER_SEGMENT = 'sofi_main'
+  and CREDITBUREAUSTRATEGY = 'EXPERIAN'
+group by 1, 2, 3
+order by 1, 2, 3;
+
+
+select DECISION_CODE,
+       count(*),
+       --count(SOFIINQ) / count(*) as pct_SOFIINQ,
+       min(SOFIINQ)              as min_SOFIINQ,
+       max(SOFIINQ)              as max_SOFIINQ
+from TDM_SANDBOX.SANDBOX.asd_2306_Trigger_DM_declined2
+where NYT_TRIGGER_DATE >= '2022-08-01'
+  and SOFI_QUALITY_START = 0
+  and SOFIINQ is not null
+group by 1
+order by 1;
+
+select SOFIINQ,
+       count(*)
+from TDM_SANDBOX.SANDBOX.asd_2306_Trigger_DM_declined2
+where NYT_TRIGGER_DATE >= '2022-08-01'
+  and SOFI_QUALITY_START = 0
+  and SOFIINQ is not null
+and DECISION_CODE='5.10 Gen 3: TooManyUnsecuredInquires'
+group by 1
+order by 1;
+
+select di_decision, SOFI_QUALITY_START, count(*)
+from TDM_SANDBOX.SANDBOX.asd_2306_Trigger_DM_declined2
+where NYT_TRIGGER_DATE >= '2022-08-01'
+group by 1, 2
+order by 1, 2;
+
+select *
+from TDM_SANDBOX.SANDBOX.asd_2306_Trigger_DM_declined2
+where NYT_TRIGGER_DATE >= '2022-08-01'
+and DI_DECISION='ACCEPT'
+and SOFIINQ>=3
+and TIER_SEGMENT='sofi_main';
+
+-- Weird approved cases with SOFIINQ>=3
+
+--2023-03-26
+--vantage 784 or 802
+--fico 830
+-- income 100000.00
+b55f5e04-5fb3-4e4e-bbec-5e244b4282b3,22165d36-b024-48ff-a6ca-41b2c56dde3a
+
+select *--party_id--*--SOFIINQ,PROMOTION_HIST_KEY
+from TDM_SANDBOX.SANDBOX.asd_2306_Trigger_DM_declined2
+where NYT_TRIGGER_DATE >= '2022-08-01'
+and SOFI_QUALITY_START=1
+and SOFIINQ=10;
+
+-- business=22706932
+-- id=22706932
+
+-- app_id=23285769
+-- dw_app=23285769
+
+-- user=28851171
+-- applicant=28851171
+
+select *
+FROM TDM_MARTECH.CLEANSED.EXPERIAN_REALTIME_ALL_TRIGGERS
+where event_party_id=2689130
+
+select di.TARGET_ID
+     , di.TARGET_TYPE
+     , di.UW_REQUEST_UUID
+     , di.UW_RESULT_UUID
+     , di.DATE_OF_UNDERWRITING
+     , di.UW_REQUEST
+     , di.UW_RESULT
+     , di.UW_RESULT:applicationDecisionInfo:applicationType::string                                                 as app_type
+     , try_cast(di.UW_RESULT:applicationDecisionInfo:individualDecisionInfos[0]:underwritingFico::string as int)    as uw_fico_pri
+     , try_cast(di.UW_RESULT:applicationDecisionInfo:individualDecisionInfos[1]:underwritingFico::string as int)    as uw_fico_cob
+     , try_cast(coalesce(
+        di.UW_REQUEST:application:applicantsList[0]:creditPull:attributes:SOFIINQ: value::string,
+        di.UW_REQUEST:application:applicantsList[0]:creditPull:attributes:SOFIINQ:originalValue::string) as bigint) as SOFIINQ_pri
+     , try_cast(coalesce(
+        di.UW_REQUEST:application:applicantsList[1]:creditPull:attributes:SOFIINQ: value::string,
+        di.UW_REQUEST:application:applicantsList[1]:creditPull:attributes:SOFIINQ:originalValue::string) as bigint) as SOFIINQ_cob
+     , di.UW_RESULT:workflowVersionUsed::string                                                                     as workflow_version_used
+from TDM_UNDERWRITING.CLEANSED.DIODES_OFFICIAL di
+where TARGET_id = '22706932';
+
+select DATE_START,INITIAL_DECISION,APPLICATION_TYPE,COBORROWER_INDICATOR
+from TDM_RISK_MGMT_HUB.MODELED.applications_file
+where id='22706932';
+
+-- Other validations
+
+select id,
+       APPLICATION_ID,
+       Dw_APPLICATION_ID,
+       BUSINESS_APPLICATION_ID,
+       substring(NYT_TRIGGER_DATE, 1, 7) as trigger_month,
+       VANTAGE_SCORE,
+       TRIGGERED_VANTAGE_BUCKET,
+       TRIGGER_INCOME_BUCKET,
+       DECLINE_REASON,
+       DECISION_CODE,
+       SOFI_QUALITY_START,
+       fico,
+       FICO_BUCKET
+from TDM_SANDBOX.SANDBOX.asd_2306_Trigger_DM_declined
+where 1 = 1--trigger_month not in ('2022-07')
+  and (APPLICATION_ID in ('19970672', '19401908')
+    or DW_APPLICATION_ID in ('19970672', '19401908')
+    or id in ('19970672', '19401908')
+    or BUSINESS_APPLICATION_ID in ('19970672', '19401908')
+    );
+--APPLICATION_ID=           19970672
+--BUSINESS_APPLICATION_ID=  19401908
+
+SELECT BUSINESS_APPLICATION_ID, APPLICATION_ID, USER_ID, PROD_CELL_NUM, APP_CREATED_DATE, PROMOTION_HIST_KEY
+FROM TDM_MARKETING.MARKETING_STAGE.DM_MB_DATA
+WHERE PROD_CELL_NUM LIKE 'PT%'
+  and (APPLICATION_ID in ('19970672', '19401908') or BUSINESS_APPLICATION_ID in ('19970672', '19401908'));
+--APPLICATION_ID=           19970672
+--BUSINESS_APPLICATION_ID=  19401908
+--USER_ID=                  24104718
+--PROMOTION_HIST_KEY=       1460150761
+
+ SELECT USER_ID FROM TDM_SANDBOX.EXL_MARKETING_STAGE.MDS_ALL_TRIGGERS_MERKLE_DM
+     where PROMOTION_HIST_KEY=1460150761;
+--USER_ID=                  23367227.0
+
+select CUSTOMER_VANTAGE_SCORE --717
+FROM TDM_MARTECH.CLEANSED.EXPERIAN_REALTIME_ALL_TRIGGERS
+WHERE EVENT_DISPLAY_CODE = 'INSTI'
+  and EVENT_PARTY_ID = 23367227;
+
+
+SELECT ID,
+       APPLICANT_ID,
+       DW_APPLICATION_ID,
+       FICO,    -- 707
+       VANTAGE, --714
+       GROSS_INCOME
+FROM TDM_MARKETING.MARKETING_STAGE.MDS_PL_APPLICATION_FUNNEL
+where id in ('19401908')
+   or DW_APPLICATION_ID in ('19970672');
+
+--DW_APPLICATION_ID=19970672
+--id=               19401908
+
+--APPLICATION_ID=           19970672
+--BUSINESS_APPLICATION_ID=  19401908
+
+--TDM_MARKETING.MARKETING_STAGE.MDS_PL_APPLICATION_FUNNEL.DW_APPLICATION_ID=  TDM_MARKETING.MARKETING_STAGE.DM_MB_DATA.APPLICATION_ID
+--TDM_MARKETING.MARKETING_STAGE.MDS_PL_APPLICATION_FUNNEL.id=                 TDM_MARKETING.MARKETING_STAGE.DM_MB_DATA.BUSINESS_APPLICATION_ID
+
+
+select a.APPLICATION_ID,a.BUSINESS_APPLICATION_ID, e.fico
+from (select * from TDM_MARKETING.MARKETING_STAGE.DM_MB_DATA WHERE PROD_CELL_NUM LIKE 'PT%') a
+         inner join (select *
+                     from TDM_MARKETING.MARKETING_STAGE.MDS_PL_APPLICATION_FUNNEL
+                     WHERE YEAR(DATE_START) >= 2022) e
+                    on cast(a.BUSINESS_APPLICATION_ID as bigint) = cast(e.id as bigint)
+where a.BUSINESS_APPLICATION_ID=19401908;
+
+--fico      707 vs 707
+--vantage   717 vs 714
+--06 Gen3: Non-DM Decision Tree
+--6.04 Gen 3: Node6_Gen3_UBTI vs Node6_Gen3_UBTI
+--2022-08 trigger month vs 2022-09-13 20:07:57.319000000 -07:00
+-- income B.<70k vs 60000
+
+select di.UW_REQUEST_UUID
+     , di.UW_RESULT_UUID
+     , di.DATE_OF_UNDERWRITING
+     , di.TARGET_TYPE
+     , di.UW_REQUEST
+     , di.UW_RESULT
+     , di.UW_RESULT:applicationDecisionInfo:applicationType::string                                              as app_type
+     , try_cast(di.UW_RESULT:applicationDecisionInfo:individualDecisionInfos[0]:underwritingFico::string as int) as uw_fico
+from TDM_RISK_MGMT_HUB.MODELED.applications_file af
+         inner join TDM_UNDERWRITING.CLEANSED.DIODES_OFFICIAL di
+                    on af.ID = di.TARGET_ID and di.TARGET_TYPE = 'APP'
+where af.APPLICATION_TYPE = 'PL'
+  and ((af.COBORROWER_INDICATOR = 'N'
+    and app_type = 'Single')
+    or
+       (af.COBORROWER_INDICATOR = 'Y'
+           and app_type = 'Joint'))
+  and af.id = '19401908';
+
+select *
+      FROM TDM_MARTECH.CLEANSED.EXPERIAN_REALTIME_ALL_TRIGGERS
+      WHERE EVENT_DISPLAY_CODE = 'INSTI'
+  and EVENT_PARTY_ID = 23367227;
+
+show columns on TDM_MARTECH.CLEANSED.EXPERIAN_REALTIME_ALL_TRIGGERS;
