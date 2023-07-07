@@ -1,0 +1,58 @@
+with base_data as (
+    select *
+    from (
+             select af.ID
+                  , af.INITIAL_DECISION
+                  , di.UW_RESULT:applicationDecisionInfo:applicationType::string as app_type
+                  , di.UW_RESULT:applicationDecisionInfo:tierSegment::string     as tier_segment
+                  , di.DATE_OF_UNDERWRITING
+                  , case
+                        when di.UW_RESULT:applicationDecisionInfo:decision::string = 'ACCEPT' then 1
+                        else 0 end                                               as qs_flag_actual
+                  , case
+                        when di.UW_RESULT:applicationDecisionInfo:decision::string = 'ACCEPT' and
+                             tier_segment = 'sofi_main' then 1
+                        else 0 end                                               as qs_flag_main
+
+                  , di.UW_RESULT:applicationDecisionInfo:plSlMember              as plSlMember
+
+             from TDM_RISK_MGMT_HUB.MODELED.APPLICATIONS_FILE af
+                      left join TDM_UNDERWRITING.CLEANSED.DIODES_OFFICIAL di
+                                on af.ID = di.TARGET_ID and di.TARGET_TYPE = 'APP'
+             where af.DATE_START >= '2020-06-01'
+               and af.APPLICATION_TYPE = 'PL'
+               and ((af.COBORROWER_INDICATOR = 'N' and app_type = 'Single') or
+                    (af.COBORROWER_INDICATOR = 'Y' and app_type = 'Joint'))
+         )
+        qualify row_number() over (partition by ID order by DATE_OF_UNDERWRITING desc) = 1
+)
+select --substring(ORIGINATION_DATE, 1, 4) || '-Q' || trunc(substring(ORIGINATION_DATE, 6, 2) / 3.00001 + 1, 0) as Q
+    substring(lbd.ORIGINATION_DATE, 1, 7)                                as mon
+     , round(sum(lbd.ORIGINAL_PRIN) / 1000000, 0)                        as "Original Principal"
+     , round((sum(lbd.ORIGINAL_PRIN) / count(*)) / 1000, 2)              as "Avg Original Principal"
+     , count(*)                                                          as "# Loans"
+     , sum(case when b.plSlMember = 'true' then lbd.ORIGINAL_PRIN else 0 end) /
+       sum(lbd.ORIGINAL_PRIN)                                            as "LEM % $"
+     , sum(case when b.plSlMember = 'true' then 1 else 0 end) / count(*) as "LEM % #"
+from TDM_RISK_MGMT_HUB.MODELED.LOANS_BLENDED_DAILY lbd
+         inner join TDM_RISK_MGMT_HUB.MODELED.APPLICATIONS_FILE af on af.id = lbd.id
+         left join base_data b on lbd.id = b.id
+where lbd.ORIGINATION_DATE >= '2021-01-01'
+  and af.APPLICATION_TYPE = 'PL'
+  and lbd.tier between 1 and 8
+group by 1
+order by 1;
+
+select --substring(ORIGINATION_DATE, 1, 4) || '-Q' || trunc(substring(ORIGINATION_DATE, 6, 2) / 3.00001 + 1, 0) as Q
+    substring(lbd.ORIGINATION_DATE, 1, 7)               as mon
+     , round(sum(ORIGINAL_PRIN) / 1000000, 0)           as "Original Principal"
+     , round((sum(ORIGINAL_PRIN) / count(*)) / 1000, 2) as "Avg Original Principal"
+     , count(*)                                         as "# Loans"
+from TDM_RISK_MGMT_HUB.MODELED.LOANS_BLENDED_DAILY lbd
+         inner join TDM_RISK_MGMT_HUB.MODELED.APPLICATIONS_FILE af on af.id = lbd.id
+where lbd.ORIGINATION_DATE >= '2021-01-01'
+  and af.APPLICATION_TYPE = 'PL'
+  and lbd.tier between 1 and 8
+group by 1
+order by 1;
+
