@@ -1,0 +1,364 @@
+/* ----------------------------------------------------------------------------------------------------------------
+   ----------------------------------------------------------------------------------------------------------------
+   ----------------------------------------------------------------------------------------------------------------
+                                                Info
+   ----------------------------------------------------------------------------------------------------------------
+   ----------------------------------------------------------------------------------------------------------------
+   ----------------------------------------------------------------------------------------------------------------
+ */
+-- Get all performance from selected loans
+create or replace table TDM_SANDBOX.SANDBOX.asd_2306_CCC_DQcurves as
+select AF.ID
+     , lbd.loan_id
+     , lbd.APPLICANT_ID
+     , af.APPLICATION_TYPE
+     , lbd.tier
+     , af.COBORROWER_INDICATOR
+     , case
+           when lbd.tier between 1 and 8 then 'Main'
+           when lbd.tier between 31 and 34 then 'Prime'
+           else 'Pagaya' end              as Product
+     , af.PL_FUNDS_USE
+     , case
+           when lbd.CONFIRMED_FRAUD = 1 or cf.conf_fraud = 1 or b.uid is not null then 1
+           else 0 end                     as fraud
+     , substr(lbd.ORIGINATION_DATE, 1, 7) as orig_mon
+     , lbd.ORIGINAL_PRIN                  as orig_prin
+
+     --DQ Curves
+
+     --DPD30+@MOB1
+     , case
+           when lbm1.DAYS_PAST_DUE >= 30 then 1
+           when lbm1.LOAN_STATUS in ('CHARGE OFF', 'CHARGE OFF PIF', 'CHARGE OFF COMPLETE', 'WRITE OFF') then 1
+           else 0 end                     as mob1_dpd30p_co_ind
+     , case
+           when lbm1.DAYS_PAST_DUE >= 30 then lbm1.CURRENT_PRIN
+           when lbm1.LOAN_STATUS in ('CHARGE OFF', 'CHARGE OFF PIF', 'CHARGE OFF COMPLETE', 'WRITE OFF')
+               then -lbd.CHARGE_OFF_PRIN
+           else 0 end                     as mob1_dpd30p_co_prin
+     --DPD30+@MOB2
+     , case
+           when lbm2.DAYS_PAST_DUE >= 30 then 1
+           when lbm2.LOAN_STATUS in ('CHARGE OFF', 'CHARGE OFF PIF', 'CHARGE OFF COMPLETE', 'WRITE OFF') then 1
+           else 0 end                     as mob2_dpd30p_co_ind
+     , case
+           when lbm2.DAYS_PAST_DUE >= 30 then lbm2.CURRENT_PRIN
+           when lbm2.LOAN_STATUS in ('CHARGE OFF', 'CHARGE OFF PIF', 'CHARGE OFF COMPLETE', 'WRITE OFF')
+               then -lbd.CHARGE_OFF_PRIN
+           else 0 end                     as mob2_dpd30p_co_prin
+     --DPD30+@MOB3
+     , case
+           when lbm3.DAYS_PAST_DUE >= 30 then 1
+           when lbm3.LOAN_STATUS in ('CHARGE OFF', 'CHARGE OFF PIF', 'CHARGE OFF COMPLETE', 'WRITE OFF') then 1
+           else 0 end                     as mob3_dpd30p_co_ind
+     , case
+           when lbm3.DAYS_PAST_DUE >= 30 then lbm3.CURRENT_PRIN
+           when lbm3.LOAN_STATUS in ('CHARGE OFF', 'CHARGE OFF PIF', 'CHARGE OFF COMPLETE', 'WRITE OFF')
+               then -lbd.CHARGE_OFF_PRIN
+           else 0 end                     as mob3_dpd30p_co_prin
+     --DPD30+@MOB4
+     , case
+           when lbm4.DAYS_PAST_DUE >= 30 then 1
+           when lbm4.LOAN_STATUS in ('CHARGE OFF', 'CHARGE OFF PIF', 'CHARGE OFF COMPLETE', 'WRITE OFF') then 1
+           else 0 end                     as mob4_dpd30p_co_ind
+     , case
+           when lbm4.DAYS_PAST_DUE >= 30 then lbm4.CURRENT_PRIN
+           when lbm4.LOAN_STATUS in ('CHARGE OFF', 'CHARGE OFF PIF', 'CHARGE OFF COMPLETE', 'WRITE OFF')
+               then -lbd.CHARGE_OFF_PRIN
+           else 0 end                     as mob4_dpd30p_co_prin
+     --DPD30+@MOB5
+     , case
+           when lbm5.DAYS_PAST_DUE >= 30 then 1
+           when lbm5.LOAN_STATUS in ('CHARGE OFF', 'CHARGE OFF PIF', 'CHARGE OFF COMPLETE', 'WRITE OFF') then 1
+           else 0 end                     as mob5_dpd30p_co_ind
+     , case
+           when lbm5.DAYS_PAST_DUE >= 30 then lbm5.CURRENT_PRIN
+           when lbm5.LOAN_STATUS in ('CHARGE OFF', 'CHARGE OFF PIF', 'CHARGE OFF COMPLETE', 'WRITE OFF')
+               then -lbd.CHARGE_OFF_PRIN
+           else 0 end                     as mob5_dpd30p_co_prin
+     --DPD30+@MOB6
+     , case
+           when lbm6.DAYS_PAST_DUE >= 30 then 1
+           when lbm6.LOAN_STATUS in ('CHARGE OFF', 'CHARGE OFF PIF', 'CHARGE OFF COMPLETE', 'WRITE OFF') then 1
+           else 0 end                     as mob6_dpd30p_co_ind
+     , case
+           when lbm6.DAYS_PAST_DUE >= 30 then lbm6.CURRENT_PRIN
+           when lbm6.LOAN_STATUS in ('CHARGE OFF', 'CHARGE OFF PIF', 'CHARGE OFF COMPLETE', 'WRITE OFF')
+               then -lbd.CHARGE_OFF_PRIN
+           else 0 end                     as mob6_dpd30p_co_prin
+     --DPD30+@MOB7
+     , case
+           when lbm7.DAYS_PAST_DUE >= 30 then 1
+           when lbm7.LOAN_STATUS in ('CHARGE OFF', 'CHARGE OFF PIF', 'CHARGE OFF COMPLETE', 'WRITE OFF') then 1
+           else 0 end                     as mob7_dpd30p_co_ind
+     , case
+           when lbm7.DAYS_PAST_DUE >= 30 then lbm7.CURRENT_PRIN
+           when lbm7.LOAN_STATUS in ('CHARGE OFF', 'CHARGE OFF PIF', 'CHARGE OFF COMPLETE', 'WRITE OFF')
+               then -lbd.CHARGE_OFF_PRIN
+           else 0 end                     as mob7_dpd30p_co_prin
+     --DPD30+@MOB8
+     , case
+           when lbm8.DAYS_PAST_DUE >= 30 then 1
+           when lbm8.LOAN_STATUS in ('CHARGE OFF', 'CHARGE OFF PIF', 'CHARGE OFF COMPLETE', 'WRITE OFF') then 1
+           else 0 end                     as mob8_dpd30p_co_ind
+     , case
+           when lbm8.DAYS_PAST_DUE >= 30 then lbm8.CURRENT_PRIN
+           when lbm8.LOAN_STATUS in ('CHARGE OFF', 'CHARGE OFF PIF', 'CHARGE OFF COMPLETE', 'WRITE OFF')
+               then -lbd.CHARGE_OFF_PRIN
+           else 0 end                     as mob8_dpd30p_co_prin
+     --DPD30+@MOB9
+     , case
+           when lbm9.DAYS_PAST_DUE >= 30 then 1
+           when lbm9.LOAN_STATUS in ('CHARGE OFF', 'CHARGE OFF PIF', 'CHARGE OFF COMPLETE', 'WRITE OFF') then 1
+           else 0 end                     as mob9_dpd30p_co_ind
+     , case
+           when lbm9.DAYS_PAST_DUE >= 30 then lbm9.CURRENT_PRIN
+           when lbm9.LOAN_STATUS in ('CHARGE OFF', 'CHARGE OFF PIF', 'CHARGE OFF COMPLETE', 'WRITE OFF')
+               then -lbd.CHARGE_OFF_PRIN
+           else 0 end                     as mob9_dpd30p_co_prin
+     --DPD30+@MOB10
+     , case
+           when lbm10.DAYS_PAST_DUE >= 30 then 1
+           when lbm10.LOAN_STATUS in ('CHARGE OFF', 'CHARGE OFF PIF', 'CHARGE OFF COMPLETE', 'WRITE OFF') then 1
+           else 0 end                     as mob10_dpd30p_co_ind
+     , case
+           when lbm10.DAYS_PAST_DUE >= 30 then lbm10.CURRENT_PRIN
+           when lbm10.LOAN_STATUS in ('CHARGE OFF', 'CHARGE OFF PIF', 'CHARGE OFF COMPLETE', 'WRITE OFF')
+               then -lbd.CHARGE_OFF_PRIN
+           else 0 end                     as mob10_dpd30p_co_prin
+     --DPD30+@MOB11
+     , case
+           when lbm11.DAYS_PAST_DUE >= 30 then 1
+           when lbm11.LOAN_STATUS in ('CHARGE OFF', 'CHARGE OFF PIF', 'CHARGE OFF COMPLETE', 'WRITE OFF') then 1
+           else 0 end                     as mob11_dpd30p_co_ind
+     , case
+           when lbm11.DAYS_PAST_DUE >= 30 then lbm11.CURRENT_PRIN
+           when lbm11.LOAN_STATUS in ('CHARGE OFF', 'CHARGE OFF PIF', 'CHARGE OFF COMPLETE', 'WRITE OFF')
+               then -lbd.CHARGE_OFF_PRIN
+           else 0 end                     as mob11_dpd30p_co_prin
+     --DPD30+@Yr1
+     , case
+           when lbm12.DAYS_PAST_DUE >= 30 then 1
+           when lbm12.LOAN_STATUS in ('CHARGE OFF', 'CHARGE OFF PIF', 'CHARGE OFF COMPLETE', 'WRITE OFF') then 1
+           else 0 end                     as yr1_dpd30p_co_ind
+     , case
+           when lbm12.DAYS_PAST_DUE >= 30 then lbm12.CURRENT_PRIN
+           when lbm12.LOAN_STATUS in ('CHARGE OFF', 'CHARGE OFF PIF', 'CHARGE OFF COMPLETE', 'WRITE OFF')
+               then -lbd.CHARGE_OFF_PRIN
+           else 0 end                     as yr1_dpd30p_co_prin
+     --CO@MOB1
+     , case
+           when lbm1.LOAN_STATUS in ('CHARGE OFF', 'CHARGE OFF PIF', 'CHARGE OFF COMPLETE', 'WRITE OFF')
+               then -lbd.CHARGE_OFF_PRIN
+           else 0 end                     as mob1_co_dol
+     , case
+           when lbm1.LOAN_STATUS in ('CHARGE OFF', 'CHARGE OFF PIF', 'CHARGE OFF COMPLETE', 'WRITE OFF') then 1
+           else 0 end                     as mob1_co_unit
+     --CO@MOB2
+     , case
+           when lbm2.LOAN_STATUS in ('CHARGE OFF', 'CHARGE OFF PIF', 'CHARGE OFF COMPLETE', 'WRITE OFF')
+               then -lbd.CHARGE_OFF_PRIN
+           else 0 end                     as mob2_co_dol
+     , case
+           when lbm2.LOAN_STATUS in ('CHARGE OFF', 'CHARGE OFF PIF', 'CHARGE OFF COMPLETE', 'WRITE OFF') then 1
+           else 0 end                     as mob2_co_unit
+     --CO@MOB3
+     , case
+           when lbm3.LOAN_STATUS in ('CHARGE OFF', 'CHARGE OFF PIF', 'CHARGE OFF COMPLETE', 'WRITE OFF')
+               then -lbd.CHARGE_OFF_PRIN
+           else 0 end                     as mob3_co_dol
+     , case
+           when lbm3.LOAN_STATUS in ('CHARGE OFF', 'CHARGE OFF PIF', 'CHARGE OFF COMPLETE', 'WRITE OFF') then 1
+           else 0 end                     as mob3_co_unit
+     --CO@MOB4
+     , case
+           when lbm4.LOAN_STATUS in ('CHARGE OFF', 'CHARGE OFF PIF', 'CHARGE OFF COMPLETE', 'WRITE OFF')
+               then -lbd.CHARGE_OFF_PRIN
+           else 0 end                     as mob4_co_dol
+     , case
+           when lbm4.LOAN_STATUS in ('CHARGE OFF', 'CHARGE OFF PIF', 'CHARGE OFF COMPLETE', 'WRITE OFF') then 1
+           else 0 end                     as mob4_co_unit
+     --CO@MOB5
+     , case
+           when lbm5.LOAN_STATUS in ('CHARGE OFF', 'CHARGE OFF PIF', 'CHARGE OFF COMPLETE', 'WRITE OFF')
+               then -lbd.CHARGE_OFF_PRIN
+           else 0 end                     as mob5_co_dol
+     , case
+           when lbm5.LOAN_STATUS in ('CHARGE OFF', 'CHARGE OFF PIF', 'CHARGE OFF COMPLETE', 'WRITE OFF') then 1
+           else 0 end                     as mob5_co_unit
+     --CO@MOB6
+     , case
+           when lbm6.LOAN_STATUS in ('CHARGE OFF', 'CHARGE OFF PIF', 'CHARGE OFF COMPLETE', 'WRITE OFF')
+               then -lbd.CHARGE_OFF_PRIN
+           else 0 end                     as mob6_co_dol
+     , case
+           when lbm6.LOAN_STATUS in ('CHARGE OFF', 'CHARGE OFF PIF', 'CHARGE OFF COMPLETE', 'WRITE OFF') then 1
+           else 0 end                     as mob6_co_unit
+     --CO@MOB7
+     , case
+           when lbm7.LOAN_STATUS in ('CHARGE OFF', 'CHARGE OFF PIF', 'CHARGE OFF COMPLETE', 'WRITE OFF')
+               then -lbd.CHARGE_OFF_PRIN
+           else 0 end                     as mob7_co_dol
+     , case
+           when lbm7.LOAN_STATUS in ('CHARGE OFF', 'CHARGE OFF PIF', 'CHARGE OFF COMPLETE', 'WRITE OFF') then 1
+           else 0 end                     as mob7_co_unit
+     --CO@MOB8
+     , case
+           when lbm8.LOAN_STATUS in ('CHARGE OFF', 'CHARGE OFF PIF', 'CHARGE OFF COMPLETE', 'WRITE OFF')
+               then -lbd.CHARGE_OFF_PRIN
+           else 0 end                     as mob8_co_dol
+     , case
+           when lbm8.LOAN_STATUS in ('CHARGE OFF', 'CHARGE OFF PIF', 'CHARGE OFF COMPLETE', 'WRITE OFF') then 1
+           else 0 end                     as mob8_co_unit
+     --CO@MOB9
+     , case
+           when lbm9.LOAN_STATUS in ('CHARGE OFF', 'CHARGE OFF PIF', 'CHARGE OFF COMPLETE', 'WRITE OFF')
+               then -lbd.CHARGE_OFF_PRIN
+           else 0 end                     as mob9_co_dol
+     , case
+           when lbm9.LOAN_STATUS in ('CHARGE OFF', 'CHARGE OFF PIF', 'CHARGE OFF COMPLETE', 'WRITE OFF') then 1
+           else 0 end                     as mob9_co_unit
+     --CO@MOB10
+     , case
+           when lbm10.LOAN_STATUS in ('CHARGE OFF', 'CHARGE OFF PIF', 'CHARGE OFF COMPLETE', 'WRITE OFF')
+               then -lbd.CHARGE_OFF_PRIN
+           else 0 end                     as mob10_co_dol
+     , case
+           when lbm10.LOAN_STATUS in ('CHARGE OFF', 'CHARGE OFF PIF', 'CHARGE OFF COMPLETE', 'WRITE OFF') then 1
+           else 0 end                     as mob10_co_unit
+     --CO@MOB11
+     , case
+           when lbm11.LOAN_STATUS in ('CHARGE OFF', 'CHARGE OFF PIF', 'CHARGE OFF COMPLETE', 'WRITE OFF')
+               then -lbd.CHARGE_OFF_PRIN
+           else 0 end                     as mob11_co_dol
+     , case
+           when lbm11.LOAN_STATUS in ('CHARGE OFF', 'CHARGE OFF PIF', 'CHARGE OFF COMPLETE', 'WRITE OFF') then 1
+           else 0 end                     as mob11_co_unit
+     --CO@Yr1
+     , case
+           when lbm12.LOAN_STATUS in ('CHARGE OFF', 'CHARGE OFF PIF', 'CHARGE OFF COMPLETE', 'WRITE OFF')
+               then -lbd.CHARGE_OFF_PRIN
+           else 0 end                     as yr1_co_dol
+     , case
+           when lbm12.LOAN_STATUS in ('CHARGE OFF', 'CHARGE OFF PIF', 'CHARGE OFF COMPLETE', 'WRITE OFF') then 1
+           else 0 end                     as yr1_co_unit
+
+from TDM_RISK_MGMT_HUB.MODELED.LOANS_BLENDED_DAILY lbd
+         left join TDM_RISK_MGMT_HUB.MODELED.LOANS_BLENDED_MONTHLY lbm1
+                   on lbd.LOAN_ID = lbm1.LOAN_ID and lbm1.SEASONING_ORIG = 1
+         left join TDM_RISK_MGMT_HUB.MODELED.LOANS_BLENDED_MONTHLY lbm2
+                   on lbd.LOAN_ID = lbm2.LOAN_ID and lbm2.SEASONING_ORIG = 2
+         left join TDM_RISK_MGMT_HUB.MODELED.LOANS_BLENDED_MONTHLY lbm3
+                   on lbd.LOAN_ID = lbm3.LOAN_ID and lbm3.SEASONING_ORIG = 3
+         left join TDM_RISK_MGMT_HUB.MODELED.LOANS_BLENDED_MONTHLY lbm4
+                   on lbd.LOAN_ID = lbm4.LOAN_ID and lbm4.SEASONING_ORIG = 4
+         left join TDM_RISK_MGMT_HUB.MODELED.LOANS_BLENDED_MONTHLY lbm5
+                   on lbd.LOAN_ID = lbm5.LOAN_ID and lbm5.SEASONING_ORIG = 5
+         left join TDM_RISK_MGMT_HUB.MODELED.LOANS_BLENDED_MONTHLY lbm6
+                   on lbd.LOAN_ID = lbm6.LOAN_ID and lbm6.SEASONING_ORIG = 6
+         left join TDM_RISK_MGMT_HUB.MODELED.LOANS_BLENDED_MONTHLY lbm7
+                   on lbd.LOAN_ID = lbm7.LOAN_ID and lbm7.SEASONING_ORIG = 7
+         left join TDM_RISK_MGMT_HUB.MODELED.LOANS_BLENDED_MONTHLY lbm8
+                   on lbd.LOAN_ID = lbm8.LOAN_ID and lbm8.SEASONING_ORIG = 8
+         left join TDM_RISK_MGMT_HUB.MODELED.LOANS_BLENDED_MONTHLY lbm9
+                   on lbd.LOAN_ID = lbm9.LOAN_ID and lbm9.SEASONING_ORIG = 9
+         left join TDM_RISK_MGMT_HUB.MODELED.LOANS_BLENDED_MONTHLY lbm10
+                   on lbd.LOAN_ID = lbm10.LOAN_ID and lbm10.SEASONING_ORIG = 10
+         left join TDM_RISK_MGMT_HUB.MODELED.LOANS_BLENDED_MONTHLY lbm11
+                   on lbd.LOAN_ID = lbm11.LOAN_ID and lbm11.SEASONING_ORIG = 11
+         left join TDM_RISK_MGMT_HUB.MODELED.LOANS_BLENDED_MONTHLY lbm12
+                   on lbd.LOAN_ID = lbm12.LOAN_ID and lbm12.SEASONING_ORIG = 12
+         LEFT JOIN TDM_RISK_MGMT_HUB.MODELED.APPLICATIONS_FILE AF on lbd.ID = AF.ID
+         left join tdm_sandbox.sandbox.plmb_fraud_uid_list as b on af.applicant_id = b.uid
+         left join
+     (select id
+           , max(case when activity_id = '1309' then 1 else 0 end) as conf_fraud
+      from TDM_RISK_MGMT_HUB.MODELED.applications_file af
+               left join TDM_RISK_MGMT_HUB.MODELED.application_activity_facts aaf
+                         on af.dw_application_id = aaf.application_id
+               left join TDM_RISK_MGMT_HUB.MODELED.dates st_dt on aaf.active_date_id = st_dt.date_id
+      where APPLICATION_TYPE = 'PL'
+        and af.DATE_DOC_UPLOAD >= '2022-01-01'
+        and af.DATE_DOC_UPLOAD < '2023-03-01'
+        and ACTIVITY_ID in ('1309')
+      group by 1) as cf on af.id = cf.id
+where AF.ID in (
+    '16163481',	'18292580',	'18593529',	'16190758',	'21030599',	'18728110',	'22668177',	'16566033',	'17987339',	'19007513',	'16484164',	'18758774',	'18234222',	'22115897',	'17845814',	'19937323',	'23217348',	'19346286',	'21812470',	'18643873',	'18404329',	'17268248',	'18300618',	'17722347',	'16626092',	'23134776',	'18276888',	'20377838',	'16436180',	'17994962',	'16280898',	'20597863',	'17107962',	'17190800',	'23055991',	'18912908',	'16580959',	'20358241',	'23500809',	'22063638',	'17370048',	'18809799',	'17890775',	'18237987',	'17901442',	'16056566',	'17967577',	'20674840',	'16200300',	'18163180',	'16399381',	'22969361',	'20028764',	'21595251',	'22576681',	'16634581',	'19428334',	'21992858',	'21322355',	'19077133',	'18676498',	'19124199',	'16962271',	'15778220',	'20745837',	'17644501',	'15762815',	'18043895',	'18311426',	'16519069',	'20740800',	'19565899',	'16963672',	'21057924',	'17995406',	'19071674',	'17073588',	'16876529',	'22524102',	'17316539',	'19305432',	'17429422',	'15697796',	'18199680',	'17555208',	'19312928',	'20336809',	'16944845',	'20000961',	'23947058',	'16924377',	'17978218',	'23957539',	'15979365',	'21286862',	'22533649',	'18790301',	'20669088',	'24037597',	'23056387',	'18486096',	'18563006',	'18989230',	'19170655',	'17300531',	'15841763',	'15884317',	'20912337',	'15743852',	'21511303',	'17211927',	'18733488',	'23540757',	'20812591',	'17400315',	'19900468',	'19201927',	'23404826',	'18299610',	'18277338',	'19291902',	'17034505',	'16539445',	'15709511',	'22807713',	'21893364',	'18117020',	'18180920',	'18056587',	'15763123',	'23168532',	'22322206',	'19162509',	'16848769',	'18649430',	'21929624',	'18565238',	'20143904',	'23151210',	'19419240',	'17168986',	'16644734',	'20293075',	'18382862',	'18373293',	'19018057',	'20291093',	'22807897',	'17497354',	'21333217',	'20708383',	'20643808',	'17999896',	'16590667',	'23707869',	'20256880',	'19301583',	'22581869',	'20131969',	'20907744',	'21337664',	'19288110',	'18828175',	'22348025',	'19386125',	'21409960',	'19869642',	'16820301',	'21785404',	'20791819',	'18416563',	'18456559',	'18179343',	'21034279',	'20002050',	'18141953',	'18076585',	'18178467',	'17790653',	'19261559',	'23863943',	'16835126',	'16332408',	'17654454',	'21667299',	'21048585',	'22150653',	'22474959',	'22392501',	'18965947',	'21855410',	'23007924',	'15652734',	'17448959',	'17173502',	'17760525',	'16092340',	'23546774',	'16846293',	'20545419',	'15706831',	'17451025',	'19247805',	'16072836',	'16190780',	'21261078',	'20751708',	'17960236',	'17198497',	'23600203',	'18222773',	'16602809',	'19566551',	'15806862',	'23432214',	'15962897',	'20123672',	'19872677',	'19035770',	'17588628',	'16940637',	'18332565',	'20912997',	'21347535',	'19081656',	'17380498',	'19476887',	'19725638',	'21317997',	'22322732',	'21764142',	'19017182',	'15589008',	'21075542',	'17929627',	'20116776',	'16109192',	'18066012',	'18852747',	'17524685',	'23232565',	'19407494',	'22255598',	'19040704',	'22967718',	'20680199',	'23086203',	'23397746',	'15879861',	'15798451',	'18725789',	'17642360',	'22127011',	'15616940',	'21982049',	'19721137',	'23600993',	'20085535',	'22742416',	'18121946',	'18444479',	'20871815',	'21062209',	'16804883',	'17957946',	'20733775',	'16832423',	'21792798',	'19157461',	'16898981',	'18662217',	'15544425',	'17422638',	'23603182',	'19053077',	'16772637',	'20927670',	'21124529',	'17915608',	'16010407',	'19742546',	'18146848',	'19732195',	'15936840',	'15545180',	'19190370',	'16616195',	'16225086',	'23037587',	'21073264',	'20579721',	'23549113',	'23008725',	'23280631',	'17330673',	'16307714',	'22204200',	'16954637',	'18766644',	'18211739',	'21302327',	'23484538',	'18177939',	'18914290',	'16846157',	'18889670',	'17006989',	'23103375',	'18684585',	'19293461',	'23956162',	'16204517',	'18032510',	'22383615',	'20662566',	'20173469',	'19394662',	'17161982',	'20264744',	'17425906',	'22290133',	'20574840',	'20665516',	'20271000',	'16243529',	'17796271',	'19505248',	'17611346',	'17970869',	'17890408',	'16820909',	'17634363',	'19092642',	'18437539',	'17507999',	'21930751',	'19373754',	'16724251',	'19964586',	'17455449',	'18822966',	'18941390',	'16705702',	'16506126',	'21363369',	'21644798',	'16802421',	'18083930',	'20305387',	'23036651',	'21209909',	'20948325',	'19787881',	'19254446',	'16428946',	'19058050',	'16053180',	'16422390',	'16487926',	'17483267',	'19855714',	'20065408',	'22412124',	'17607720',	'23167192',	'18477692',	'19585564',	'16200528',	'15802727',	'20700024',	'15678184',	'16756199',	'18898028',	'17680047',	'16825298',	'17426229',	'18863670',	'17944568',	'17008394',	'19337220',	'16550058',	'17047140',	'18404315',	'22941822',	'18264999',	'18400907',	'17564316',	'18178016',	'22798312',	'18013806',	'16106667',	'19441314',	'18032211',	'22554815',	'17311323',	'18683299',	'16083798',	'17489625',	'22992480',	'22999063',	'19746047',	'18405831',	'18582826',	'17889223',	'17348746',	'17566974',	'19686558',	'20419364',	'19188886',	'17952839',	'20082796',	'17828509',	'18177654',	'18758782',	'17326916',	'20055699',	'18760661',	'16956620',	'18225419',	'18637714',	'23842846',	'18718609',	'22473809',	'21083156',	'18682448',	'23429894',	'16607671',	'22943402',	'15980026',	'23964717',	'23358316',	'23835066',	'20393988',	'22117190',	'23009485',	'17598335',	'16188547',	'19306512',	'23136315',	'18553328',	'21367760',	'16234329',	'17436103',	'18149797',	'19294305',	'16626347',	'17432374',	'20258522',	'18051545',	'16667079',	'19232301',	'24004372',	'19107028',	'15745917',	'18156420',	'17068613',	'20918180',	'18876674',	'17967821',	'18609960',	'19357051',	'16563613',	'19922724',	'17656989',	'17234095',	'17163187',	'22250950',	'17802517',	'19078167',	'16919522',	'18450919',	'18365889',	'17061930',	'16244431',	'19768826',	'20731760',	'21229534',	'15923138',	'23008906',	'20266348',	'22687101',	'15608991',	'16364698',	'20083964',	'16869906',	'16903245',	'22529913',	'19755383',	'22609870',	'22914373',	'18266410',	'16046475',	'22991088',	'15710183',	'22925389',	'20911091',	'21311708',	'16007552',	'17726441',	'16506097',	'18902993',	'23523855',	'19843740',	'18144115',	'19739012',	'23001384',	'18575148',	'18726340',	'22695976',	'23128167',	'22755228',	'18940732',	'19530229',	'21818349',	'16953522',	'18706606',	'19547060',	'16739216',	'17806692',	'18202306',	'17268206',	'18366482',	'18786737',	'17978228',	'17348506',	'18330436',	'22641088',	'18048823',	'17094352',	'19682838',	'16557076',	'16956757',	'20215879',	'20760410',	'19011721',	'20763481',	'21980636',	'18160788',	'21438165',	'17925032',	'18201339',	'16326533',	'21199010',	'19676382',	'16142243',	'18233836',	'18029466',	'18301437',	'20160653',	'21578754',	'22333115',	'16702878',	'22010902',	'16691477',	'17314510',	'18183697',	'18558460',	'23525244',	'16537584',	'17962556',	'15541802',	'18275362',	'16776665',	'19753255',	'17496870',	'18206898',	'22343712',	'23506846',	'18107599',	'22343979',	'18630804',	'22625138',	'20803130',	'22007148',	'15813123',	'17051131',	'19407318',	'19146754',	'22873592',	'23816988',	'17382844',	'21277853',	'16997833',	'16959031',	'17663197',	'23131219',	'16935417',	'15752313',	'16375546',	'17052003',	'19245358',	'19696200',	'17416257',	'20774215',	'20681161',	'23017940',	'23519494',	'18356585',	'16951833',	'18345330',	'17027747',	'15964299',	'19896871',	'16880182',	'17510507',	'17607922',	'19999854',	'17236879',	'19279509',	'19012444',	'16255743',	'17918198',	'15600725',	'20514596',	'17406179',	'16353885',	'20190373',	'18720903',	'17681722',	'18277077',	'18744996',	'18062760',	'17404596',	'22424919',	'23266140',	'22507485',	'17167860',	'22695642',	'15887051',	'20258112',	'18498752',	'22286119',	'21463695',	'19931932',	'18452804',	'16590428',	'15719744',	'21268803',	'22396394',	'22415202',	'20385051',	'17890782',	'17672105',	'16967536',	'18762224',	'19593143',	'15811536',	'17354874',	'20288646',	'20213638',	'18542830',	'18664777',	'17074404',	'16499338',	'16264989',	'18051171',	'19692075',	'17964392',	'16712887',	'19004958',	'17452182',	'18058598',	'21170948',	'17421536',	'22763802',	'17983538',	'22009332',	'20018183',	'18045353',	'20378550',	'19053919',	'23035023',	'16431941',	'17269397',	'15672958',	'16946394',	'18673573',	'17111908',	'16694936',	'17347091',	'17992980',	'19446434',	'15609101',	'18479576',	'23655599',	'20439657',	'17280985',	'17904825',	'17909322',	'15571887',	'15553546',	'16515140',	'18143201',	'17136392',	'16761316',	'18476088',	'19824057',	'19381695',	'17629485',	'20091937',	'16828492',	'22586813',	'17469889',	'16540177',	'15500299',	'18244079',	'17654566',	'17844533',	'16921145',	'23503944',	'16237357',	'16659917',	'16777764'
+        );
+
+select count(*),
+       count(distinct loan_id),
+       count(distinct id),
+       sum(fraud)                                 as fraud,
+       sum(case when tier = 20 then 1 else 0 end) as pagaya
+from TDM_SANDBOX.SANDBOX.asd_2306_CCC_DQcurves;
+
+/*
+select *
+from TDM_SANDBOX.SANDBOX.asd_2306_CCC_DQcurves
+where mob6_co_unit=1;
+*/
+
+select ORIG_MON
+     , count(*)                  as loans
+
+     , sum(mob1_dpd30p_co_ind)   as mob1_dpd30p_co_ind
+     , sum(mob2_dpd30p_co_ind)   as mob2_dpd30p_co_ind
+     , sum(mob3_dpd30p_co_ind)   as mob3_dpd30p_co_ind
+     , sum(mob4_dpd30p_co_ind)   as mob4_dpd30p_co_ind
+     , sum(mob5_dpd30p_co_ind)   as mob5_dpd30p_co_ind
+     , sum(mob6_dpd30p_co_ind)   as mob6_dpd30p_co_ind
+     , sum(mob7_dpd30p_co_ind)   as mob7_dpd30p_co_ind
+     , sum(mob8_dpd30p_co_ind)   as mob8_dpd30p_co_ind
+     , sum(mob9_dpd30p_co_ind)   as mob9_dpd30p_co_ind
+     , sum(mob10_dpd30p_co_ind)  as mob10_dpd30p_co_ind
+     , sum(mob11_dpd30p_co_ind)  as mob11_dpd30p_co_ind
+     , sum(yr1_dpd30p_co_ind)    as yr1_dpd30p_co_ind
+
+     , sum(mob1_co_unit)         as mob1_co_unit
+     , sum(mob2_co_unit)         as mob2_co_unit
+     , sum(mob3_co_unit)         as mob3_co_unit
+     , sum(mob4_co_unit)         as mob4_co_unit
+     , sum(mob5_co_unit)         as mob5_co_unit
+     , sum(mob6_co_unit)         as mob6_co_unit
+     , sum(mob7_co_unit)         as mob7_co_unit
+     , sum(mob8_co_unit)         as mob8_co_unit
+     , sum(mob9_co_unit)         as mob9_co_unit
+     , sum(mob10_co_unit)        as mob10_co_unit
+     , sum(mob11_co_unit)        as mob11_co_unit
+     , sum(yr1_co_unit)          as yr1_co_unit
+from TDM_SANDBOX.SANDBOX.asd_2306_CCC_DQcurves
+group by 1
+order by 1;
+
+select ORIG_MON
+     , sum(ORIG_PRIN)            as orig_prin
+     , sum(mob1_dpd30p_co_prin)  as mob1_dpd30p_co_prin
+     , sum(mob2_dpd30p_co_prin)  as mob2_dpd30p_co_prin
+     , sum(mob3_dpd30p_co_prin)  as mob3_dpd30p_co_prin
+     , sum(mob4_dpd30p_co_prin)  as mob4_dpd30p_co_prin
+     , sum(mob5_dpd30p_co_prin)  as mob5_dpd30p_co_prin
+     , sum(mob6_dpd30p_co_prin)  as mob6_dpd30p_co_prin
+     , sum(mob7_dpd30p_co_prin)  as mob7_dpd30p_co_prin
+     , sum(mob8_dpd30p_co_prin)  as mob8_dpd30p_co_prin
+     , sum(mob9_dpd30p_co_prin)  as mob9_dpd30p_co_prin
+     , sum(mob10_dpd30p_co_prin) as mob10_dpd30p_co_prin
+     , sum(mob11_dpd30p_co_prin) as mob11_dpd30p_co_prin
+     , sum(yr1_dpd30p_co_prin)   as yr1_dpd30p_co_prin
+
+     , sum(mob1_co_dol)          as mob1_co_dol
+     , sum(mob2_co_dol)          as mob2_co_dol
+     , sum(mob3_co_dol)          as mob3_co_dol
+     , sum(mob4_co_dol)          as mob4_co_dol
+     , sum(mob5_co_dol)          as mob5_co_dol
+     , sum(mob6_co_dol)          as mob6_co_dol
+     , sum(mob7_co_dol)          as mob7_co_dol
+     , sum(mob8_co_dol)          as mob8_co_dol
+     , sum(mob9_co_dol)          as mob9_co_dol
+     , sum(mob10_co_dol)         as mob10_co_dol
+     , sum(mob11_co_dol)         as mob11_co_dol
+     , sum(yr1_co_dol)           as mob11_co_dol
+from TDM_SANDBOX.SANDBOX.asd_2306_CCC_DQcurves
+group by 1
+order by 1;
