@@ -1,0 +1,763 @@
+
+select count(*), max(date_start)
+from dwmart.applications_file;
+
+select count(*), max(ORIGINATION_DATE)
+from dwmart.loans_blended_daily;
+
+-- 3 min
+create or replace table TDM_SANDBOX.SANDBOX.asd_2304_housing_payment_0 as
+select
+     --General variables
+    af.id
+     , af.date_start
+     , af.date_submit
+     , af.initial_decision
+     , af.coborrower_indicator
+
+     , di.target_id
+     , di.UW_REQUEST_UUID
+     , di.UW_RESULT_UUID
+     , di.DATE_OF_UNDERWRITING
+     , di.UW_RESULT:applicationDecisionInfo:applicationType::string                                                                  as app_type
+     , di.UW_REQUEST:creditBureauStrategy::string                                                                                    as creditBureauStrategy
+     , di.UW_RESULT:applicationDecisionInfo:decision::string                                                                         as di_decision
+
+     , di.UW_RESULT:applicationDecisionInfo:fcfv2::float                                                                             as FCF
+     , try_cast(di.UW_RESULT:applicationDecisionInfo.projectedUbti::string as float)                                                 as UBTI
+
+     --Borrower
+     , af.applicant_id                                                                                                               as applicant_id_pri
+     , di.UW_REQUEST:application:applicantsList[0]:housing::string                                                                   as Housing_type_pri
+     , di.UW_RESULT:applicationDecisionInfo:individualDecisionInfos[0]:grossIncome::float                                            as gross_income_pri
+     , try_cast(coalesce(di.UW_REQUEST:application:applicantsList[0]:creditPull:attributes:MTA5830: value::string,
+                         di.UW_REQUEST:application:applicantsList[0]:creditPull:attributes:MTA5830:originalValue::string) as bigint) as MTA5830_pri
+     , try_cast(coalesce(di.UW_REQUEST:application:applicantsList[0]:creditPull:attributes:MTJ5820: value::string,
+                         di.UW_REQUEST:application:applicantsList[0]:creditPull:attributes:MTJ5820:originalValue::string) as bigint) as MTJ5820_pri
+
+     --Coborrower
+     , af.COBORROWER_applicant_id                                                                                                    as applicant_id_cob
+     , di.UW_REQUEST:application:applicantsList[1]:housing::string                                                                   as housing_type_cob
+     , di.UW_RESULT:applicationDecisionInfo:individualDecisionInfos[1]:grossIncome::float                                            as gross_income_cob
+     , try_cast(coalesce(di.UW_REQUEST:application:applicantsList[1]:creditPull:attributes:MTA5830: value::string,
+                         di.UW_REQUEST:application:applicantsList[1]:creditPull:attributes:MTA5830:originalValue::string) as bigint) as MTA5830_cob
+     , try_cast(coalesce(di.UW_REQUEST:application:applicantsList[1]:creditPull:attributes:MTJ5820: value::string,
+                         di.UW_REQUEST:application:applicantsList[1]:creditPull:attributes:MTJ5820:originalValue::string) as bigint) as MTJ5820_cob
+
+
+from dwmart.applications_file af
+         left join TDM_UNDERWRITING.CLEANSED.DIODES di
+                   on af.ID = di.TARGET_ID and
+                      di.TARGET_TYPE = 'APP' and
+                      di.RESULT_TYPE = 'OFFICIAL' and
+                      di.product_name = 'PL' and
+                      di.UW_RESULT:uwModel::string = 'PLGen3'
+where af.application_type = 'PL'
+  and af.date_start between '2022-12-10' and '2023-04-18';
+
+--2375722,546662
+select count(*) as total, count(*) - count(distinct id) as dup
+from TDM_SANDBOX.SANDBOX.asd_2304_housing_payment_0;
+
+select *
+from TDM_SANDBOX.SANDBOX.asd_2304_housing_payment_0
+limit 10;
+
+select housing_type_pri,count(*)
+from TDM_SANDBOX.SANDBOX.asd_2304_housing_payment_0
+group by 1
+order by 1;
+
+update TDM_SANDBOX.SANDBOX.asd_2304_housing_payment_0
+set MTA5830_pri=case when MTA5830_pri between 0 and 999999990 then MTA5830_pri else 0 end,
+    MTJ5820_pri=case when MTJ5820_pri between 0 and 999999990 then MTJ5820_pri else 0 end,
+    MTA5830_cob=case when MTA5830_cob between 0 and 999999990 then MTA5830_cob else 0 end,
+    MTJ5820_cob=case when MTJ5820_cob between 0 and 999999990 then MTJ5820_cob else 0 end;
+
+-- 30 min
+create or replace table TDM_SANDBOX.SANDBOX.asd_2304_housing_payment_1
+as
+with housing_cost_experiment
+         as
+         (
+             select try_to_number(E.USER_ID)                       as user_id
+                  , E.EVENT_TIME::DATE                             as EVENT_DATE
+                  , E.EVENT_PROPERTIES['housing_payment']::VARCHAR AS housing_cost
+             FROM AMPLITUDE_DATA_SHARE.SCHEMA_250200.EVENTS_250200 E
+             where E.EVENT_PROPERTIES['event'] = 'pl3-question-submit-and-save'
+               and E.EVENT_PROPERTIES['filtered_path'] = '/personal-loan/app/about-you/housing_payment/'
+               and E.EVENT_TIME::DATE >= '2022-12-10'
+               and E.USER_ID is not null
+               and housing_cost is not null
+                 qualify row_number() over (partition by user_id, EVENT_DATE order by E.EVENT_TIME desc) = 1
+         )
+select
+     --General
+    af.id
+     , af.date_start
+     , af.date_submit
+     , af.initial_decision
+     , af.coborrower_indicator
+     , af.UW_REQUEST_UUID
+     , af.UW_RESULT_UUID
+     , af.DATE_OF_UNDERWRITING
+     , af.app_type
+     , af.creditBureauStrategy
+     , af.di_decision
+     , af.FCF
+     , af.UBTI
+
+     --Borrower
+     , af.applicant_id_pri
+     , af.Housing_type_pri
+     , af.gross_income_pri
+     , MTA5830_pri
+     , MTJ5820_pri
+     , case when hce1.user_id is not null then 1 else 0 end                                                    as Conf_Housing_Test_pri
+     , hce1.housing_cost                                                                                       as Stated_Housing_Cost_Pri
+     , case
+           when (MTA5830_pri > 0 or MTJ5820_pri > 0) and housing_type_pri = 'OWN'
+               then (greatest(MTA5830_pri, MTJ5820_pri) - MTJ5820_pri / 2)
+           else (greatest(MTA5830_pri, MTJ5820_pri) - MTJ5820_pri / 2 + 0.12 * gross_income_pri /
+                                                                        12)::int end                           as sim_housing_cost_pri
+
+     --Coborrower
+     , af.applicant_id_cob
+     , af.housing_type_cob
+     , af.gross_income_cob
+     , MTA5830_cob
+     , MTJ5820_cob
+     , case when hce2.user_id is not null then 1 else 0 end                                                    as Conf_Housing_Test_cob
+     , hce2.housing_cost                                                                                       as Stated_Housing_Cost_Cob
+     , coalesce(case
+                    when (MTA5830_cob > 0 or MTJ5820_cob > 0) and housing_type_cob = 'OWN'
+                        then (greatest(MTA5830_cob, MTJ5820_cob) - MTJ5820_cob / 2)
+                    else (greatest(MTA5830_cob, MTJ5820_cob) - MTJ5820_cob / 2 + 0.12 * gross_income_cob / 12) end,
+                0)                                                                                             as sim_housing_cost_cob
+from TDM_SANDBOX.SANDBOX.asd_2304_housing_payment_0 af
+         left join housing_cost_experiment hce1
+                   on af.applicant_id_pri = hce1.user_id and af.date_start = hce1.event_date
+         left join housing_cost_experiment hce2
+                   on af.applicant_id_cob = hce2.user_id and af.date_start = hce2.event_date
+    qualify row_number() over (partition by id order by DATE_OF_UNDERWRITING desc) = 1;
+
+--1829060,0
+select count(*) as total, count(*) - count(distinct id) as dup
+from TDM_SANDBOX.SANDBOX.asd_2304_housing_payment_1;
+
+--30%
+select count(*),count(coalesce(Stated_Housing_Cost_Pri,Stated_Housing_Cost_Cob)),count(coalesce(Stated_Housing_Cost_Pri,Stated_Housing_Cost_Cob))/count(*)
+from TDM_SANDBOX.SANDBOX.asd_2304_housing_payment_1;
+
+--95%
+select count(*),count(sim_Housing_Cost_Pri),count(sim_Housing_Cost_Pri)/count(*)
+from TDM_SANDBOX.SANDBOX.asd_2304_housing_payment_1;
+
+create or replace table TDM_SANDBOX.SANDBOX.asd_2304_housing_payment_2
+as
+select a.*,
+       af.DATE_DOC_UPLOAD,
+       af.product_category,
+       af.IS_PL_REFI_APP,
+       di.UW_REQUEST:application:applicantsList[0]:housingPaymentStated::float as housingPaymentStated_Pri,
+       di.UW_REQUEST:application:applicantsList[1]:housingPaymentStated::float as housingPaymentStated_Cob,
+       lbd.loan_id,
+       lbd.ORIGINAL_PRIN,
+       lbd.ORIGINATION_DATE,
+       lbd.LOAN_STATUS,
+       lbd.DAYS_PAST_DUE,
+       lbd.CURRENT_PRIN,
+       lbd.tier,
+       case when lbd.CONFIRMED_FRAUD = 1 or cf.conf_fraud = 1 /*or fraud_atk.uid is not null*/ then 1 else 0 end as fraud
+from TDM_SANDBOX.SANDBOX.asd_2304_housing_payment_1 a
+         left join dwmart.applications_file af on a.id = af.id
+         left join DWMART.LOANS_BLENDED_DAILY lbd on lbd.ID = AF.ID
+         left join TDM_UNDERWRITING.CLEANSED.DIODES di on a.UW_REQUEST_UUID=di.UW_REQUEST_UUID
+         --left join tdm_sandbox.sandbox.plmb_fraud_uid_list as fraud_atk on af.applicant_id = fraud_atk.uid
+         left join
+     (select id
+           , max(case when activity_id = '1309' then 1 else 0 end) as conf_fraud
+      from TDM_RISK_MGMT_HUB.MODELED.applications_file af
+               left join TDM_RISK_MGMT_HUB.MODELED.application_activity_facts aaf
+                         on af.dw_application_id = aaf.application_id
+               left join TDM_RISK_MGMT_HUB.MODELED.dates st_dt on aaf.active_date_id = st_dt.date_id
+      where APPLICATION_TYPE = 'PL'
+        and af.DATE_DOC_UPLOAD >= '2022-01-01'
+        and af.DATE_DOC_UPLOAD < '2023-03-01'
+        and ACTIVITY_ID in ('1309')
+      group by 1) as cf on lbd.id = cf.id;
+
+
+--1829060,0
+select count(*) as total, count(*) - count(distinct id) as dup
+from TDM_SANDBOX.SANDBOX.asd_2304_housing_payment_2;
+
+update TDM_SANDBOX.SANDBOX.asd_2304_housing_payment_2 as a
+set a.fraud=case when b.uid is not null then 1 else a.fraud end
+from (
+select * from tdm_sandbox.sandbox.plmb_fraud_uid_list
+) b
+where a.applicant_id_pri = b.uid;
+
+-- Casting as float
+alter table TDM_SANDBOX.SANDBOX.asd_2304_housing_payment_2 add aux1 float, aux2 float;
+
+update TDM_SANDBOX.SANDBOX.asd_2304_housing_payment_2 set
+aux1=cast(Stated_Housing_Cost_Pri as float),
+aux2=cast(Stated_Housing_Cost_Cob as float);
+
+alter table TDM_SANDBOX.SANDBOX.asd_2304_housing_payment_2 drop column Stated_Housing_Cost_Pri ,Stated_Housing_Cost_Cob ;
+
+alter table TDM_SANDBOX.SANDBOX.asd_2304_housing_payment_2 rename column aux1 to Stated_Housing_Cost_Pri;
+alter table TDM_SANDBOX.SANDBOX.asd_2304_housing_payment_2 rename column aux2 to Stated_Housing_Cost_Cob;
+
+-- Complements variable and retains its original name
+alter table TDM_SANDBOX.SANDBOX.asd_2304_housing_payment_2 add aux1 float, aux2 float;
+
+update TDM_SANDBOX.SANDBOX.asd_2304_housing_payment_2 set
+aux1=coalesce(Stated_Housing_Cost_Pri,housingPaymentStated_Pri),
+aux2=coalesce(Stated_Housing_Cost_Cob,housingPaymentStated_Cob);
+
+alter table TDM_SANDBOX.SANDBOX.asd_2304_housing_payment_2 rename column Stated_Housing_Cost_Pri to Stated_Housing_Cost_Pri_orig;
+alter table TDM_SANDBOX.SANDBOX.asd_2304_housing_payment_2 rename column Stated_Housing_Cost_Cob to Stated_Housing_Cost_Cob_orig;
+
+alter table TDM_SANDBOX.SANDBOX.asd_2304_housing_payment_2 rename column aux1 to Stated_Housing_Cost_Pri;
+alter table TDM_SANDBOX.SANDBOX.asd_2304_housing_payment_2 rename column aux2 to Stated_Housing_Cost_Cob;
+
+-- Computes Housing cost v3
+alter table TDM_SANDBOX.SANDBOX.asd_2304_housing_payment_2 add Housing_Costv3_Pri float, Housing_Costv3_Cob float, new_HOUSING_TYPE_PRI varchar(20), new_HOUSING_TYPE_COB varchar(20);
+
+update TDM_SANDBOX.SANDBOX.asd_2304_housing_payment_2
+set Housing_Costv3_Pri=case
+                           when (MTA5830_pri > 0 or MTJ5820_pri > 0) and HOUSING_TYPE_PRI = 'OWN'
+                               then (greatest(MTA5830_pri, MTJ5820_pri) - MTJ5820_pri / 2)
+                           else greatest(least(Stated_Housing_Cost_Pri, 10000), 500) end,
+    Housing_Costv3_cob=case
+                           when COBORROWER_INDICATOR = 'Y' then (case
+                                                                     when (MTA5830_cob > 0 or MTJ5820_cob > 0) and HOUSING_TYPE_cob = 'OWN'
+                                                                         then (greatest(MTA5830_cob, MTJ5820_cob) - MTJ5820_cob / 2)
+                                                                     else greatest(least(Stated_Housing_Cost_cob, 10000), 500) end)
+                           else null end,
+    new_HOUSING_TYPE_PRI=case
+                             when HOUSING_TYPE_PRI = 'OWN' and MTA5830_pri = 0 and MTJ5820_pri = 0
+                                 then 'OWN (NO MORTGAGE)'
+                             else HOUSING_TYPE_PRI end,
+    new_HOUSING_TYPE_cob=case
+                             when HOUSING_TYPE_cob = 'OWN' and MTA5830_cob = 0 and MTJ5820_cob = 0
+                                 then 'OWN (NO MORTGAGE)'
+                             else HOUSING_TYPE_cob end;
+
+-- Validating the HC v3
+select HOUSING_TYPE_PRI,new_HOUSING_TYPE_PRI,count(*),min(Housing_Costv3_Pri),max(Housing_Costv3_Pri)
+from TDM_SANDBOX.SANDBOX.asd_2304_housing_payment_2
+group by 1,2
+order by 1,2;
+
+alter table TDM_SANDBOX.SANDBOX.asd_2304_housing_payment_2 add MHE_proxy float;
+
+update TDM_SANDBOX.SANDBOX.asd_2304_housing_payment_2 set
+MHE_proxy=case
+           when (MTA5830_pri > 0 or MTJ5820_pri > 0) and HOUSING_TYPE_PRI = 'OWN' then (greatest(MTA5830_pri, MTJ5820_pri) - MTJ5820_pri / 2)
+           when HOUSING_TYPE_PRI='OWN' then 0.15 * gross_income_pri / 12
+           when HOUSING_TYPE_PRI='RENT' then 0.16 * gross_income_pri / 12
+           when HOUSING_TYPE_PRI='PARENT' then 0.11 * gross_income_pri / 12
+           else null end;
+
+select DI_DECISION,new_HOUSING_TYPE_PRI,MTA5830_pri,MTJ5820_pri,gross_income_pri,MHE_proxy,Sim_Housing_Cost_Pri as Housing_Costv2,Housing_Costv3_Pri as Housing_Costv3
+from TDM_SANDBOX.SANDBOX.asd_2304_housing_payment_2
+where product_category <> 'CRB_Pagaya'
+  and coalesce(fraud, 0) = 0
+  and HOUSING_TYPE_PRI<>'OWN'
+  and mta5830_pri>0;
+
+use schema TDM_SANDBOX.SANDBOX;
+
+create or replace function hp_ranking(hp_value float)
+    returns varchar
+as
+$$
+    case
+        when hp_value >=0 and hp_value <= 500 then '01 - 0-500'
+        when hp_value <= 1000 then '02 - 501-1k'
+        when hp_value <= 2000 then '03 - 1K-2K'
+        when hp_value <= 3000 then '04 - 2K-3K'
+        when hp_value <= 4000 then '05 - 3K-4K'
+        when hp_value > 4000 then '06 - >4K'
+        end
+$$
+;
+-- Validates the band distribution
+select
+--hp_ranking(Sim_Housing_Cost_Pri)                       as Housing_Costv2_Pri_band
+hp_ranking(Housing_Costv3_Pri)                         as Housing_Costv3_Pri_band
+,count(*)
+from TDM_SANDBOX.SANDBOX.asd_2304_housing_payment_2
+where product_category <> 'CRB_Pagaya'
+  and coalesce(fraud, 0) = 0
+group by 1
+order by 1;
+
+select count(*)
+from TDM_SANDBOX.SANDBOX.asd_2304_housing_payment_2
+where product_category <> 'CRB_Pagaya'
+  and coalesce(fraud, 0) = 0
+and Sim_Housing_Cost_Pri>=0 and Housing_Costv3_Pri>=0 and MHE_PROXY>=0
+
+-- Pivot table
+select COBORROWER_INDICATOR
+     , case
+           when initial_decision in ('ACCEPT') and DATE_SUBMIT is not null and DATE_DOC_UPLOAD is not null and
+                ORIGINATION_DATE is not null then '4. Funded'
+           when initial_decision in ('ACCEPT') and DATE_SUBMIT is not null and DATE_DOC_UPLOAD is not null then '3. DU'
+           when initial_decision in ('ACCEPT') and DATE_SUBMIT is not null then '2. Submit'
+           when initial_decision in ('ACCEPT') then '1. QS' end as funnel
+     , case when IS_PL_REFI_APP is null then 'N' else 'Y' end   as Refi
+     , case
+           when date_start >= '2023-04-17' then '4 - Apr 17th'
+           when date_start >= '2023-03-16' then '3 - Mar 16th'
+           when date_start >= '2023-02-22' then '2 - Feb 22nd'
+           when date_start >= '2023-01-30' then '1 - Jan 30th'
+    end                                                         as rampups
+     , substr(date_start, 1, 7)                                 as app_month
+     , substr(ORIGINATION_DATE, 1, 7)                           as orig_mon
+     , new_housing_type_pri
+     , new_housing_type_cob
+     , case
+           when Stated_Housing_Cost_Pri > 0 then '1. Stated >0'
+           when Stated_Housing_Cost_Pri = 0 then '2. Stated 0'
+           else '3. No stated' end                              as stated_hc_0_pri
+     , case
+           when COBORROWER_INDICATOR = 'Y'
+               then (case
+                         when Stated_Housing_Cost_cob > 0 then '1. Stated >0'
+                         when Stated_Housing_Cost_cob = 0 then '2. Stated 0'
+                         else '3. No stated' end)
+           else null end                                        as stated_hc_0_cob
+     , hp_ranking(Sim_Housing_Cost_Pri)                         as Housing_Costv2_Pri_band
+     , hp_ranking(Housing_Costv3_Pri)                           as Housing_Costv3_Pri_band
+     , hp_ranking(Sim_Housing_Cost_Cob)                         as Housing_Costv2_Cob_band
+     , hp_ranking(Housing_Costv3_Cob)                           as Housing_Costv3_Cob_band
+     , tier
+     , count(*)                                                 as apps
+     , sum(iff(ORIGINATION_DATE is not null, 1, 0))             as funded
+     , sum(original_prin)                                       as original_prin
+     , sum(fcf)                                                 as fcf
+     , sum(gross_income_pri)                                    as gross_income_pri
+     , sum(gross_income_cob)                                    as gross_income_cob
+     , sum(Sim_Housing_Cost_Pri)                                as Housing_Costv2_Pri
+     , sum(Housing_Costv3_Pri)                                  as Housing_Costv3_Pri
+     , sum(MHE_PROXY)                                           as MHE_PROXY
+     , sum(Sim_Housing_Cost_Cob)                                as Housing_Costv2_Cob
+     , sum(Housing_Costv3_Cob)                                  as Housing_Costv3_Cob
+     , min(Sim_Housing_Cost_Pri)                                as Housing_Costv2_Pri_min
+     , min(Housing_Costv3_Pri)                                  as Housing_Costv3_Pri_min
+     , min(Sim_Housing_Cost_Cob)                                as Housing_Costv2_Cob_min
+     , min(Housing_Costv3_Cob)                                  as Housing_Costv3_Cob_min
+     , max(Sim_Housing_Cost_Pri)                                as Housing_Costv2_Pri_max
+     , max(Housing_Costv3_Pri)                                  as Housing_Costv3_Pri_max
+     , max(Sim_Housing_Cost_Cob)                                as Housing_Costv2_Cob_max
+     , max(Housing_Costv3_Cob)                                  as Housing_Costv3_Cob_max
+from TDM_SANDBOX.SANDBOX.asd_2304_housing_payment_2
+where product_category <> 'CRB_Pagaya'
+  and coalesce(fraud, 0) = 0
+group by 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15;
+
+
+select substr(date_start, 1, 7) as app_month
+     , case
+           when MTA5830_pri > 50000 or MTJ5820_pri > 50000 then '1 Above 50k'
+           when MTA5830_pri between 0.01 and 99 or MTJ5820_pri between 0.01 and 99 then '2 Below 100'
+    end                         as outliers
+     , count(*)                 as apps
+from TDM_SANDBOX.SANDBOX.asd_2304_housing_payment_2
+where product_category <> 'CRB_Pagaya'
+  and coalesce(fraud, 0) = 0
+group by 1, 2
+order by 1, 2;
+
+--21272086
+select id
+from TDM_SANDBOX.SANDBOX.asd_2304_housing_payment_2
+where Housing_Costv3_Pri>500000;
+
+select UW_REQUEST
+from TDM_UNDERWRITING.CLEANSED.DIODES
+where UW_REQUEST_UUID='0bb8aef7-a401-4fdc-b401-9a6fc59b2848';
+
+-- General waterfall
+select count(*) as total,
+       sum(case when product_category <> 'CRB_Pagaya' and coalesce(fraud, 0) = 0 then 1 else 0 end) as non_fraud_nor_pagaya,
+       sum(case when product_category <> 'CRB_Pagaya' and coalesce(fraud, 0) = 0 and Housing_Costv3_Pri >= 0 then 1 else 0 end) as v3_ct,
+       sum(case when product_category <> 'CRB_Pagaya' and coalesce(fraud, 0) = 0 and Sim_Housing_Cost_Pri >= 0 and Housing_Costv3_Pri>=0 then 1 else 0 end) as v2andv3_ct
+from TDM_SANDBOX.SANDBOX.asd_2304_housing_payment_2;
+
+--General statistics
+--Borrower
+select 'Housing Cost v2'                                                  as var,
+       count(*)                                                           as total,
+       --min(Stated_Housing_Cost_Pri)                                          as mini,
+       --percentile_cont(0.01) within group (order by stated_Housing_Cost_Pri) as p1,
+       percentile_cont(0.25) within group (order by sim_Housing_Cost_Pri) as p25,
+       percentile_cont(0.50) within group (order by sim_Housing_Cost_Pri) as p50,
+       round(avg(sim_Housing_Cost_Pri), 0)                                as aveg,
+       percentile_cont(0.75) within group (order by sim_Housing_Cost_Pri) as p75,
+       percentile_cont(0.99) within group (order by sim_Housing_Cost_Pri) as p99
+       --max(Stated_Housing_Cost_Pri)                                          as maxi
+from TDM_SANDBOX.SANDBOX.asd_2304_housing_payment_2
+where product_category <> 'CRB_Pagaya'
+  and coalesce(fraud, 0) = 0
+  and sim_Housing_Cost_Pri >= 0
+  and Housing_Costv3_Pri >= 0
+union all
+select 'Housing Cost v3'                                                as var,
+       count(*)                                                         as total,
+       --min(sim_Housing_Cost_Pri)                                          as mini,
+       --percentile_cont(0.01) within group (order by sim_Housing_Cost_Pri) as p1,
+       percentile_cont(0.25) within group (order by Housing_Costv3_Pri) as p25,
+       percentile_cont(0.50) within group (order by Housing_Costv3_Pri) as p50,
+       round(avg(Housing_Costv3_Pri), 0)                                as aveg,
+       percentile_cont(0.75) within group (order by Housing_Costv3_Pri) as p75,
+       percentile_cont(0.99) within group (order by Housing_Costv3_Pri) as p99
+       --max(sim_Housing_Cost_Pri)                                          as maxi
+from TDM_SANDBOX.SANDBOX.asd_2304_housing_payment_2
+where product_category <> 'CRB_Pagaya'
+  and coalesce(fraud, 0) = 0
+  and sim_Housing_Cost_Pri >= 0
+  and Housing_Costv3_Pri >= 0;
+
+--Coborrower
+select 'Housing Cost v2'                                                  as var,
+       count(*)                                                           as total,
+       --min(Stated_Housing_Cost_cob)                                          as mini,
+       --percentile_cont(0.01) within group (order by stated_Housing_Cost_cob) as p1,
+       percentile_cont(0.25) within group (order by sim_Housing_Cost_cob) as p25,
+       percentile_cont(0.50) within group (order by sim_Housing_Cost_cob) as p50,
+       round(avg(sim_Housing_Cost_cob), 0)                                as aveg,
+       percentile_cont(0.75) within group (order by sim_Housing_Cost_cob) as p75,
+       percentile_cont(0.99) within group (order by sim_Housing_Cost_cob) as p99
+       --max(Stated_Housing_Cost_cob)                                          as maxi
+from TDM_SANDBOX.SANDBOX.asd_2304_housing_payment_2
+where product_category <> 'CRB_Pagaya'
+  and coalesce(fraud, 0) = 0
+  and sim_Housing_Cost_cob >= 0
+  and Housing_Costv3_cob >= 0
+union all
+select 'Housing Cost v3'                                                as var,
+       count(*)                                                         as total,
+       --min(sim_Housing_Cost_cob)                                          as mini,
+       --percentile_cont(0.01) within group (order by sim_Housing_Cost_cob) as p1,
+       percentile_cont(0.25) within group (order by Housing_Costv3_cob) as p25,
+       percentile_cont(0.50) within group (order by Housing_Costv3_cob) as p50,
+       round(avg(Housing_Costv3_cob), 0)                                as aveg,
+       percentile_cont(0.75) within group (order by Housing_Costv3_cob) as p75,
+       percentile_cont(0.99) within group (order by Housing_Costv3_cob) as p99
+       --max(sim_Housing_Cost_cob)                                          as maxi
+from TDM_SANDBOX.SANDBOX.asd_2304_housing_payment_2
+where product_category <> 'CRB_Pagaya'
+  and coalesce(fraud, 0) = 0
+  and sim_Housing_Cost_cob >= 0
+  and Housing_Costv3_cob >= 0;
+
+--Borrower avgs v2
+select NEW_HOUSING_TYPE_PRI,
+       count(*)                            as ct,
+       min(sim_Housing_Cost_Pri)             as mini,
+       round(avg(sim_Housing_Cost_Pri), 0) as aveg,
+       max(sim_Housing_Cost_Pri)             as maxi,
+       STDDEV(sim_Housing_Cost_Pri)          as std
+from TDM_SANDBOX.SANDBOX.asd_2304_housing_payment_2
+where product_category <> 'CRB_Pagaya'
+  and coalesce(fraud, 0) = 0
+  and sim_Housing_Cost_Pri >= 0
+  and Housing_Costv3_Pri >= 0
+group by 1
+order by 1;
+
+--Borrower avgs v3
+select NEW_HOUSING_TYPE_PRI,
+       count(*)                            as ct,
+       min(Housing_Costv3_pri)             as mini,
+       round(avg(Housing_Costv3_pri), 0) as aveg,
+       max(Housing_Costv3_pri)             as maxi,
+       STDDEV(Housing_Costv3_pri)          as std
+from TDM_SANDBOX.SANDBOX.asd_2304_housing_payment_2
+where product_category <> 'CRB_Pagaya'
+  and coalesce(fraud, 0) = 0
+  and sim_Housing_Cost_Pri >= 0
+  and Housing_Costv3_Pri >= 0
+group by 1
+order by 1;
+
+--Ramp ups Waterfall
+
+select sum(case
+               when date_start >= '2023-01-30' and coborrower_indicator = 'N' then 1
+               else 0 end)                                         as first_ramp_up_count,
+       sum(case
+               when date_start >= '2023-01-30' and coborrower_indicator = 'N' and coalesce(Stated_Housing_Cost_Pri,housingPaymentStated_Pri) is not null
+                   then 1
+               else 0 end)                                         as first_ramp_up_hc_data_count,
+       sum(case when date_start >= '2023-03-16' then 1 else 0 end) as sec_ramp_up_count,
+       sum(case
+               when date_start >= '2023-03-16' and coborrower_indicator = 'Y' and
+                    coalesce(Stated_Housing_Cost_Pri,housingPaymentStated_Pri) is not null and coalesce(Stated_Housing_Cost_cOB,housingPaymentStated_cOB) is not null then 1
+               when date_start >= '2023-03-16' and coalesce(Stated_Housing_Cost_Pri,housingPaymentStated_Pri) is not null then 1
+               else 0 end)                                         as sec_ramp_up_hc_data_count
+from TDM_SANDBOX.SANDBOX.asd_2304_housing_payment_2
+where 1 = 1
+  and IS_PL_REFI_APP is null;
+
+
+select sum(case
+               when date_start >= '2023-03-16' and coborrower_indicator = 'Y' then 1
+               else 0 end)                                         as first_ramp_up_count,
+       sum(case
+               when date_start >= '2023-03-16' and coborrower_indicator = 'Y' and coalesce(Stated_Housing_Cost_cob,housingPaymentStated_cob) is not null
+                   then 1
+               else 0 end)                                         as first_ramp_up_hc_data_count
+from TDM_SANDBOX.SANDBOX.asd_2304_housing_payment_2
+where 1 = 1
+  and IS_PL_REFI_APP is null and coborrower_indicator='Y';
+
+select
+       sum(case when date_start>='2023-02-22' then 1 else 0 end) as first_ramp_up_count,
+       sum(case when date_start>='2023-02-22' and coalesce(Stated_Housing_Cost_Pri,housingPaymentStated_Pri) is not null then 1 else 0 end) as first_ramp_up_hc_data_count,
+       sum(case when date_start>='2023-03-16' then 1 else 0 end) as sec_ramp_up_count,
+       sum(case when date_start>='2023-03-16' and coalesce(Stated_Housing_Cost_Pri,housingPaymentStated_Pri) is not null then 1 else 0 end) as sec_ramp_up_hc_data_count,
+       sum(case when date_start>='2023-04-17' then 1 else 0 end) as third_ramp_up_count,
+       sum(case when date_start>='2023-04-17' and coalesce(Stated_Housing_Cost_Pri,housingPaymentStated_Pri) is not null then 1 else 0 end) as third_ramp_up_hc_data_count
+from TDM_SANDBOX.SANDBOX.asd_2304_housing_payment_2
+where 1=1
+and IS_PL_REFI_APP is not null;
+
+-- Factor of 12% comparison
+
+select count(*)
+from (
+         select Sim_Housing_Cost_Pri,
+                MTA5830_pri,
+                MTJ5820_pri,
+                gross_income_pri,
+                round((Sim_Housing_Cost_Pri - greatest(MTA5830_pri, MTJ5820_pri) + MTJ5820_pri / 2) * 12 /
+                      gross_income_pri, 2) as factor
+         from TDM_SANDBOX.SANDBOX.asd_2304_housing_payment_2
+         where product_category <> 'CRB_Pagaya'
+           and coalesce(fraud, 0) = 0
+           and coalesce(housing_type_pri, '') <> 'OWN'
+           and gross_income_pri > 0
+           and Sim_Housing_Cost_Pri > 0
+        and factor <> 0.12
+     );
+
+--800,587
+select count(*),min(round((Sim_Housing_Cost_Pri - greatest(MTA5830_pri, MTJ5820_pri) + MTJ5820_pri / 2) * 12 /
+                      gross_income_pri, 2))                                                                                      as min_factor
+     , median(round((Sim_Housing_Cost_Pri - greatest(MTA5830_pri, MTJ5820_pri) + MTJ5820_pri / 2) * 12 /
+                      gross_income_pri, 2))                                                                                      as median_factor
+     , avg(round((Sim_Housing_Cost_Pri - greatest(MTA5830_pri, MTJ5820_pri) + MTJ5820_pri / 2) * 12 /
+                      gross_income_pri, 2))                                                                                      as avg_factor
+     , max(round((Sim_Housing_Cost_Pri - greatest(MTA5830_pri, MTJ5820_pri) + MTJ5820_pri / 2) * 12 /
+                      gross_income_pri, 2))                                                                                      as max_factor
+from TDM_SANDBOX.SANDBOX.asd_2304_housing_payment_2
+where product_category <> 'CRB_Pagaya'
+  and coalesce(fraud, 0) = 0
+  and coalesce(housing_type_pri,'') <> 'OWN'
+and gross_income_pri>0
+and Sim_Housing_Cost_Pri >=0;
+
+select count(*)
+from (
+         select stated_Housing_Cost_Pri,
+                MTA5830_pri,
+                MTJ5820_pri,
+                gross_income_pri,
+                round((stated_Housing_Cost_Pri - greatest(MTA5830_pri, MTJ5820_pri) + MTJ5820_pri / 2) * 12 /
+                      gross_income_pri, 2) as factor
+         from TDM_SANDBOX.SANDBOX.asd_2304_housing_payment_2
+         where product_category <> 'CRB_Pagaya'
+           and coalesce(fraud, 0) = 0
+           and coalesce(housing_type_pri, '') <> 'OWN'
+           and gross_income_pri > 0
+           and stated_Housing_Cost_Pri >= 0
+    and factor<0
+     );
+
+--257,681
+select count(*)
+     , min(round((stated_Housing_Cost_Pri - greatest(MTA5830_pri, MTJ5820_pri) + MTJ5820_pri / 2) * 12 /
+                 gross_income_pri, 2)) as min_factor
+     ,median(round((stated_Housing_Cost_Pri - greatest(MTA5830_pri, MTJ5820_pri) + MTJ5820_pri / 2) * 12 /
+                      gross_income_pri, 2)) as median_factor
+     , avg(round((stated_Housing_Cost_Pri - greatest(MTA5830_pri, MTJ5820_pri) + MTJ5820_pri / 2) * 12 /
+                 gross_income_pri, 2)) as avg_factor
+     , max(round((stated_Housing_Cost_Pri - greatest(MTA5830_pri, MTJ5820_pri) + MTJ5820_pri / 2) * 12 /
+                 gross_income_pri, 2)) as max_factor
+from TDM_SANDBOX.SANDBOX.asd_2304_housing_payment_2
+where product_category <> 'CRB_Pagaya'
+  and coalesce(fraud, 0) = 0
+  and coalesce(housing_type_pri, '') <> 'OWN'
+  and gross_income_pri > 0
+  and stated_Housing_Cost_Pri >= 0;
+
+--Weird cases
+select id,UW_REQUEST_UUID,date_start,APP_TYPE,housing_type_pri,APPLICANT_ID_PRI,Stated_Housing_Cost_Pri as housing_cost_first,housingPaymentStated_Pri as housing_cost_diodes,fcf
+from TDM_SANDBOX.SANDBOX.asd_2304_housing_payment_2
+where product_category <> 'CRB_Pagaya'
+  and coalesce(fraud, 0) = 0
+  and COBORROWER_INDICATOR='N'
+and Stated_Housing_Cost_Pri<>housingPaymentStated_Pri
+and housing_cost_diodes between 1 and 10
+limit 20;
+
+select UW_REQUEST
+from TDM_UNDERWRITING.CLEANSED.DIODES
+where UW_REQUEST_UUID='70936122-642e-430b-a83f-81b37edfc0af';
+
+
+-- 3 min
+create or replace table TDM_SANDBOX.SANDBOX.asd_2304_housing_payment_0_fcf as
+select
+     --General variables
+    af.id
+     , af.date_start
+     , af.date_submit
+     , af.initial_decision
+     , af.coborrower_indicator
+
+     , di.target_id
+     , di.UW_REQUEST_UUID
+     , di.UW_RESULT_UUID
+     , di.DATE_OF_UNDERWRITING
+     , di.UW_RESULT:applicationDecisionInfo:applicationType::string                                                                  as app_type
+     , di.UW_REQUEST:creditBureauStrategy::string                                                                                    as creditBureauStrategy
+     , di.UW_RESULT:applicationDecisionInfo:decision::string                                                                         as di_decision
+
+     , di.UW_RESULT:applicationDecisionInfo:fcfv2::float                                                                             as FCF
+     , try_cast(di.UW_RESULT:applicationDecisionInfo.projectedUbti::string as float)                                                 as UBTI
+
+     --Borrower
+     , af.applicant_id                                                                                                               as applicant_id_pri
+     , di.UW_REQUEST:application:applicantsList[0]:housing::string                                                                   as Housing_type_pri
+     , di.UW_RESULT:applicationDecisionInfo:individualDecisionInfos[0]:grossIncome::float                                            as gross_income_pri
+     , try_cast(coalesce(di.UW_REQUEST:application:applicantsList[0]:creditPull:attributes:MTA5830: value::string,
+                         di.UW_REQUEST:application:applicantsList[0]:creditPull:attributes:MTA5830:originalValue::string) as bigint) as MTA5830_pri
+     , try_cast(coalesce(di.UW_REQUEST:application:applicantsList[0]:creditPull:attributes:MTJ5820: value::string,
+                         di.UW_REQUEST:application:applicantsList[0]:creditPull:attributes:MTJ5820:originalValue::string) as bigint) as MTJ5820_pri
+
+     --Coborrower
+     , af.COBORROWER_applicant_id                                                                                                    as applicant_id_cob
+     , di.UW_REQUEST:application:applicantsList[1]:housing::string                                                                   as housing_type_cob
+     , di.UW_RESULT:applicationDecisionInfo:individualDecisionInfos[1]:grossIncome::float                                            as gross_income_cob
+     , try_cast(coalesce(di.UW_REQUEST:application:applicantsList[1]:creditPull:attributes:MTA5830: value::string,
+                         di.UW_REQUEST:application:applicantsList[1]:creditPull:attributes:MTA5830:originalValue::string) as bigint) as MTA5830_cob
+     , try_cast(coalesce(di.UW_REQUEST:application:applicantsList[1]:creditPull:attributes:MTJ5820: value::string,
+                         di.UW_REQUEST:application:applicantsList[1]:creditPull:attributes:MTJ5820:originalValue::string) as bigint) as MTJ5820_cob
+
+
+from dwmart.applications_file af
+         left join TDM_UNDERWRITING.CLEANSED.DIODES di
+                   on af.ID = di.TARGET_ID and
+                      di.TARGET_TYPE = 'APP' and
+                      di.RESULT_TYPE = 'OFFICIAL' and
+                      di.product_name = 'PL' and
+                      di.UW_RESULT:uwModel::string = 'PLGen3'
+where af.application_type = 'PL'
+  and af.date_start between '2022-12-10' and '2023-04-25';
+
+select UW_REQUEST_UUID,UW_REQUEST,UW_RESULT_UUID,UW_RESULT
+       ,di.UW_REQUEST:application:applicantsList[0]:housingPaymentStated::float as housingPaymentStated_Pri,
+       ,di.UW_REQUEST:application:applicantsList[1]:housingPaymentStated::float as housingPaymentStated_Cob,
+       ,di.UW_RESULT:applicationDecisionInfo:fcf:canAddCoapplicant as canAddCoapplicant
+       ,di.UW_RESULT:applicationDecisionInfo:fcf:coapplicantFcfKnockout as coapplicantFcfKnockout
+       ,try_cast(di.UW_RESULT:applicationDecisionInfo:fcf:v2::string as string) as fcfv2
+       ,try_cast(di.UW_RESULT:applicationDecisionInfo:fcf:v3::string as string) as fcfv3
+       ,try_cast(di.UW_RESULT:applicationDecisionInfo:fcf:valueUsed::string as string) as fcf_used
+       ,try_cast(di.UW_RESULT:applicationDecisionInfo:fcf:versionUsed::string as string) as fcf_version
+from dwmart.applications_file af
+         left join TDM_UNDERWRITING.CLEANSED.DIODES di
+                   on af.ID = di.TARGET_ID and
+                      di.TARGET_TYPE = 'APP' and
+                      di.RESULT_TYPE = 'OFFICIAL' and
+                      di.product_name = 'PL' and
+                      di.UW_RESULT:uwModel::string = 'PLGen3'
+where af.application_type = 'PL'
+  and af.date_start between '2023-04-23' and '2023-04-25'
+and WORKFLOW_VERSION_USED='16.1'
+limit 15;
+
+alter table TDM_SANDBOX.SANDBOX.asd_2304_housing_payment_2 add dm_ind int, lightbox_ind int;
+
+update TDM_SANDBOX.SANDBOX.asd_2304_housing_payment_2 as a
+set a.dm_ind=case when di.UW_REQUEST:application:rateLockType::string = 'DIRECT_MAIL' then 1 else 0 end,
+    a.lightbox_ind=case when di.UW_REQUEST:application:rateLockType::string = 'LIGHTBOX' then 1 else 0 end
+from TDM_UNDERWRITING.CLEANSED.DIODES_OFFICIAL di
+where a.UW_REQUEST_UUID = di.UW_REQUEST_UUID;
+
+select dm_ind,lightbox_ind,count(*)
+from TDM_SANDBOX.SANDBOX.asd_2304_housing_payment_2
+group by 1,2
+order by 1,2;
+
+
+-- Final results (Deck)
+
+--Testing
+select NEW_HOUSING_TYPE_PRI,
+       count(*)                            as ct,
+       round(avg(sim_Housing_Cost_Pri), 0) as old,
+       round(avg(MHE_PROXY), 0) as proxy,
+       round(avg(Housing_Costv3_pri), 0) as new
+from TDM_SANDBOX.SANDBOX.asd_2304_housing_payment_2
+where product_category <> 'CRB_Pagaya'
+  and coalesce(fraud, 0) = 0
+  and sim_Housing_Cost_Pri >= 0
+  and Housing_Costv3_Pri >= 0
+  and coalesce(lightbox_ind, 0) = 0
+  and coalesce(dm_ind, 0) = 0
+ and initial_decision in ('ACCEPT')
+and DATE_SUBMIT is not null and DATE_DOC_UPLOAD is not null and ORIGINATION_DATE is not null
+group by 1
+order by 1;
+
+select
+       count(*)                            as ct,
+       round(avg(sim_Housing_Cost_Pri), 0) as old,
+       round(avg(MHE_PROXY), 0) as proxy,
+       round(avg(Housing_Costv3_pri), 0) as new
+from TDM_SANDBOX.SANDBOX.asd_2304_housing_payment_2
+where product_category <> 'CRB_Pagaya'
+  and coalesce(fraud, 0) = 0
+  and sim_Housing_Cost_Pri >= 0
+  and Housing_Costv3_Pri >= 0
+  and coalesce(lightbox_ind, 0) = 0
+  and coalesce(dm_ind, 0) = 0
+ and initial_decision in ('ACCEPT')
+and DATE_SUBMIT is not null and DATE_DOC_UPLOAD is not null and ORIGINATION_DATE is not null
+;
+
+--Bands
+select hp_ranking(sim_Housing_Cost_Pri) as sim_Housing_Cost_Pri_band,count(*) as apps
+from TDM_SANDBOX.SANDBOX.asd_2304_housing_payment_2
+where product_category <> 'CRB_Pagaya'
+  and coalesce(fraud, 0) = 0
+  and sim_Housing_Cost_Pri >= 0
+  and Housing_Costv3_Pri >= 0
+  and coalesce(lightbox_ind, 0) = 0
+  and coalesce(dm_ind, 0) = 0
+ and initial_decision in ('ACCEPT')
+and DATE_SUBMIT is not null and DATE_DOC_UPLOAD is not null and ORIGINATION_DATE is not null
+group by 1
+order by 1;
+
+select hp_ranking(Housing_Costv3_Pri) as Housing_Costv3_Pri_band,count(*) as apps
+from TDM_SANDBOX.SANDBOX.asd_2304_housing_payment_2
+where product_category <> 'CRB_Pagaya'
+  and coalesce(fraud, 0) = 0
+  and sim_Housing_Cost_Pri >= 0
+  and Housing_Costv3_Pri >= 0
+  and coalesce(lightbox_ind, 0) = 0
+  and coalesce(dm_ind, 0) = 0
+ and initial_decision in ('ACCEPT')
+and DATE_SUBMIT is not null and DATE_DOC_UPLOAD is not null and ORIGINATION_DATE is not null
+group by 1
+order by 1;
