@@ -1,0 +1,263 @@
+-- Get all funded loans from Jan to Apr 2023
+create or replace table TDM_SANDBOX.SANDBOX.asd_2305_PL_w_SLdebt_2018 as
+select AF.ID
+     , lbd.loan_id
+     , lbd.APPLICANT_ID
+     , cp.CREDIT_PULL_ID
+     , af.DATE_START
+     , lbd.CURRENT_OWNER_NAME
+     , lbd.ORIG_GROSS_INT_RATE
+     , lbd.tier
+     , af.COBORROWER_INDICATOR
+     , lbd.LOAN_STATUS
+     , af.PL_FUNDS_USE
+     , lbd.ORIGINATION_DATE                                                                                  as orig_mon
+     , lbd.ORIGINAL_PRIN                                                                                     as orig_prin
+     , case
+           when lbd.tier between 1 and 8 then 'Main'
+           when lbd.tier between 31 and 34 then 'Prime'
+           else 'Pagaya' end                                                                                 as Product
+     , case when lbd.CONFIRMED_FRAUD = 1 or cf.conf_fraud = 1 or fraud_atk.uid is not null then 1 else 0 end as fraud
+     , parse_json(cp.EXPERIAN_ATTRIBUTE_JSON):STU5020::bigint                                                as STU5020
+     , parse_json(cp.EXPERIAN_ATTRIBUTE_JSON):STU5820::bigint                                                as STU5820
+     , parse_json(cp.EXPERIAN_ATTRIBUTE_JSON):STU0300::bigint                                                as STU0300
+     , parse_json(cp.EXPERIAN_ATTRIBUTE_JSON):STU0802::bigint                                                as STU0802
+     , parse_json(cp.EXPERIAN_ATTRIBUTE_JSON):STU0812::bigint                                                as STU0812
+     , parse_json(cp.EXPERIAN_ATTRIBUTE_JSON):STU5092::bigint                                                as STU5092
+     , parse_json(cp.EXPERIAN_ATTRIBUTE_JSON):STU0416::bigint                                                as STU0416
+from DWMART.LOANS_BLENDED_DAILY lbd
+         left join TDM_RISK_MGMT_HUB.MODELED.APPLICATIONS_FILE af on lbd.ID = af.ID
+         --LEFT JOIN DWMART.APPLICATIONS_FILE AF on lbd.ID = AF.ID
+         left join tdm_sandbox.sandbox.plmb_fraud_uid_list as b on af.applicant_id = b.uid
+         left join tdm_sandbox.sandbox.plmb_fraud_uid_list as fraud_atk on af.applicant_id = fraud_atk.uid
+         left join
+     (select id
+           , max(case when activity_id = '1309' then 1 else 0 end) as conf_fraud
+      from TDM_RISK_MGMT_HUB.MODELED.applications_file af
+               left join TDM_RISK_MGMT_HUB.MODELED.application_activity_facts aaf
+                         on af.dw_application_id = aaf.application_id
+               left join TDM_RISK_MGMT_HUB.MODELED.dates st_dt on aaf.active_date_id = st_dt.date_id
+      where APPLICATION_TYPE = 'PL'
+        and af.DATE_DOC_UPLOAD >= '2022-01-01'
+        and af.DATE_DOC_UPLOAD < '2023-03-01'
+        and ACTIVITY_ID in ('1309')
+      group by 1) as cf on lbd.id = cf.id
+         left join TDM_RISK_MGMT_HUB.MODELED.PRODUCT_APPLICATION_FACTS paf on af.DW_APPLICATION_ID = paf.APPLICATION_ID
+         left join TDM_RISK_MGMT_HUB.MODELED.UNDERWRITING_CREDIT_FACTS ucf
+                   on paf.SELECTED_UW_ID = ucf.UNDERWRITING_INFO_ID
+         left join TDM_RISK_MGMT_HUB.MODELED.CREDIT_PULL cp on ucf.PRIMARY_CREDIT_PULL_ID = cp.CREDIT_PULL_ID
+where lbd.APPLICATION_TYPE in ('PL')
+  and lbd.ORIGINATION_DATE between '2018-01-01' and '2023-04-30';
+
+--990826,0,0
+select count(*),count(*)-count(distinct loan_id) as dup_loan_id,count(*)-count(distinct id) as dup_id
+from TDM_SANDBOX.SANDBOX.asd_2305_PL_w_SLdebt_2018;
+
+select substr(orig_mon,1,7) as orig_mon,count(*) as loans,round(sum(orig_prin)/1000000,0) as orig_prin,count(STU5020),count(STU0416)
+from TDM_SANDBOX.SANDBOX.asd_2305_PL_w_SLdebt_2018
+where tier<>20
+group by 1
+order by 1;
+
+create or replace table TDM_SANDBOX.SANDBOX.asd_2305_PL_w_SLdebt_2018_2 as
+select a.*, di.*
+from TDM_SANDBOX.SANDBOX.asd_2305_PL_w_SLdebt_2018 a
+         left join (
+    select *
+    from (
+             select di.target_id
+                  , di.UW_REQUEST_UUID
+                  , di.UW_RESULT_UUID
+                  , di.DATE_OF_UNDERWRITING
+                  , di.UW_RESULT:applicationDecisionInfo:applicationType::string                                                 as app_type
+                  , di.UW_REQUEST:creditBureauStrategy::string                                                                   as creditBureauStrategy
+                  , di.UW_RESULT:applicationDecisionInfo:decision::string                                                        as di_decision
+
+-- Borrower
+        --Total monthly payment on open non-deferred student trades reported in the last 3 months
+                  , try_cast(coalesce(
+                     di.UW_REQUEST:application:applicantsList[0]:creditPull:attributes:STU5820: value::string,
+                     di.UW_REQUEST:application:applicantsList[0]:creditPull:attributes:STU5820:originalValue::string) as bigint) as STU5820_PRI
+        --Total number of non-deferred student trades
+                  , try_cast(coalesce(
+                     di.UW_REQUEST:application:applicantsList[0]:creditPull:attributes:STU0300: value::string,
+                     di.UW_REQUEST:application:applicantsList[0]:creditPull:attributes:STU0300:originalValue::string) as bigint) as STU0300_PRI
+        --Total number of deferred student trades
+                  , try_cast(coalesce(
+                     di.UW_REQUEST:application:applicantsList[0]:creditPull:attributes:STU0802: value::string,
+                     di.UW_REQUEST:application:applicantsList[0]:creditPull:attributes:STU0802:originalValue::string) as bigint) as STU0802_PRI
+        --Total balance on open non-deferred student trades reported in the last 3 months
+                  , try_cast(coalesce(
+                     di.UW_REQUEST:application:applicantsList[0]:creditPull:attributes:STU5020: value::string,
+                     di.UW_REQUEST:application:applicantsList[0]:creditPull:attributes:STU5020:originalValue::string) as bigint) as STU5020_PRI
+        --Total balance on open deferred student trades
+                  , try_cast(coalesce(
+                     di.UW_REQUEST:application:applicantsList[0]:creditPull:attributes:STU5092: value::string,
+                     di.UW_REQUEST:application:applicantsList[0]:creditPull:attributes:STU5092:originalValue::string) as bigint) as STU5092_PRI
+        --Total number of open non-deferred student trades reported in the last 3 months
+                  , try_cast(coalesce(
+                     di.UW_REQUEST:application:applicantsList[0]:creditPull:attributes:STU0416: value::string,
+                     di.UW_REQUEST:application:applicantsList[0]:creditPull:attributes:STU0416:originalValue::string) as bigint) as STU0416_PRI
+        --Total number of open deferred student trades
+                  , try_cast(coalesce(
+                     di.UW_REQUEST:application:applicantsList[0]:creditPull:attributes:STU0812: value::string,
+                     di.UW_REQUEST:application:applicantsList[0]:creditPull:attributes:STU0812:originalValue::string) as bigint) as STU0812_PRI
+
+-- Coborrower
+
+                  , try_cast(coalesce(
+                     di.UW_REQUEST:application:applicantsList[1]:creditPull:attributes:STU5820: value::string,
+                     di.UW_REQUEST:application:applicantsList[1]:creditPull:attributes:STU5820:originalValue::string) as bigint) as STU5820_COB
+
+                  , try_cast(coalesce(
+                     di.UW_REQUEST:application:applicantsList[1]:creditPull:attributes:STU0300: value::string,
+                     di.UW_REQUEST:application:applicantsList[1]:creditPull:attributes:STU0300:originalValue::string) as bigint) as STU0300_COB
+
+                  , try_cast(coalesce(
+                     di.UW_REQUEST:application:applicantsList[1]:creditPull:attributes:STU0802: value::string,
+                     di.UW_REQUEST:application:applicantsList[1]:creditPull:attributes:STU0802:originalValue::string) as bigint) as STU0802_COB
+
+                  , try_cast(coalesce(
+                     di.UW_REQUEST:application:applicantsList[1]:creditPull:attributes:STU5020: value::string,
+                     di.UW_REQUEST:application:applicantsList[1]:creditPull:attributes:STU5020:originalValue::string) as bigint) as STU5020_COB
+
+                  , try_cast(coalesce(
+                     di.UW_REQUEST:application:applicantsList[1]:creditPull:attributes:STU5092: value::string,
+                     di.UW_REQUEST:application:applicantsList[1]:creditPull:attributes:STU5092:originalValue::string) as bigint) as STU5092_COB
+
+                  , try_cast(coalesce(
+                     di.UW_REQUEST:application:applicantsList[1]:creditPull:attributes:STU0416: value::string,
+                     di.UW_REQUEST:application:applicantsList[1]:creditPull:attributes:STU0416:originalValue::string) as bigint) as STU0416_COB
+
+                  , try_cast(coalesce(
+                     di.UW_REQUEST:application:applicantsList[1]:creditPull:attributes:STU0812: value::string,
+                     di.UW_REQUEST:application:applicantsList[1]:creditPull:attributes:STU0812:originalValue::string) as bigint) as STU0812_COB
+
+             from TDM_UNDERWRITING.CLEANSED.DIODES_OFFICIAL di
+             where di.TARGET_TYPE = 'APP'
+         ) b
+        qualify row_number() over (partition by b.target_id order by b.DATE_OF_UNDERWRITING) = 1
+) di on a.ID = di.TARGET_ID;
+
+--137017,0,0
+--990826,0,0
+select count(*),count(*)-count(distinct loan_id) as dup_loan_id,count(*)-count(distinct id) as dup_id
+from TDM_SANDBOX.SANDBOX.asd_2305_PL_w_SLdebt_2018_2;
+
+alter table TDM_SANDBOX.SANDBOX.asd_2305_PL_w_SLdebt_2018_2 add
+    SL_def int, SL_non_def int,
+    SL_open_def_ct int, SL_open_non_def_ct int,
+    SL_open_def_bal int, SL_open_non_def_bal int,
+    SL_open_non_def_pay int;
+
+update TDM_SANDBOX.SANDBOX.asd_2305_PL_w_SLdebt_2018_2 set
+      SL_non_def=case when coalesce(STU0300_PRI,STU0300) between 1 and 90 /*or STU0300_COB between 1 and 90*/ then 1 else 0 end
+    , SL_def=case when coalesce(STU0802_PRI,STU0802) between 1 and 90 /*or STU0802_COB between 1 and 90*/ then 1 else 0 end
+    , SL_open_def_ct=case when coalesce(STU0812_PRI,STU0812) between 1 and 90 /*or STU0812_COB between 1 and 90*/ then 1 else 0 end
+    , SL_open_non_def_ct=case when coalesce(STU0416_PRI,STU0416) between 1 and 90 /*or STU0416_COB between 1 and 90*/ then 1 else 0 end
+    , SL_open_def_bal=case when coalesce(STU5092_PRI,STU5092) between 1 and 999999990 /*or STU5092_COB between 1 and 999999990*/ then 1 else 0 end
+    , SL_open_non_def_bal=case when coalesce(STU5020_PRI,STU5020) between 1 and 999999990 /*or STU5020_COB between 1 and 999999990*/ then 1 else 0 end
+    , SL_open_non_def_pay=case when coalesce(STU5820_PRI,STU5820) between 1 and 999999990 /*or STU5820_COB between 1 and 999999990*/ then 1 else 0 end;
+
+alter table TDM_SANDBOX.SANDBOX.asd_2305_PL_w_SLdebt_2018_2 add yr1_co_unit int, yr1_co_dol float, SL_ecoa_2 int;
+
+update TDM_SANDBOX.SANDBOX.asd_2305_PL_w_SLdebt_2018_2 as a
+set yr1_co_unit=case
+                    when lbm.LOAN_STATUS in ('CHARGE OFF', 'CHARGE OFF PIF', 'CHARGE OFF COMPLETE', 'WRITE OFF') then 1
+                    else 0 end
+  , yr1_co_dol=case
+                   when lbm.LOAN_STATUS in ('CHARGE OFF', 'CHARGE OFF PIF', 'CHARGE OFF COMPLETE', 'WRITE OFF')
+                       then -lbm.CHARGE_OFF_PRIN
+                   else 0 end
+from (
+         select lbm.loan_id, lbm.LOAN_STATUS, lbd.CHARGE_OFF_PRIN
+         from TDM_RISK_MGMT_HUB.MODELED.LOANS_BLENDED_MONTHLY lbm
+                  inner join TDM_RISK_MGMT_HUB.MODELED.LOANS_BLENDED_DAILY lbd
+                             on lbm.loan_id = lbd.loan_id and lbm.SEASONING_ORIG = 12
+                  inner join TDM_SANDBOX.SANDBOX.asd_2305_PL_w_SLdebt_2018_2 c on lbd.loan_id = c.loan_id
+         where lbm.SEASONING_ORIG = 12
+     ) lbm
+where a.LOAN_ID = lbm.LOAN_ID;
+
+select count(*), sum(yr1_co_unit),sum(case when yr1_co_dol>0 then 1 else 0 end)
+    from TDM_SANDBOX.SANDBOX.asd_2305_PL_w_SLdebt_2018_2;
+
+update TDM_SANDBOX.SANDBOX.asd_2305_PL_w_SLdebt_2018_2 as a
+set a.SL_ecoa_2=case when b.UW_REQUEST_UUID is not null then 1 else 0 end
+from (
+         select UW_REQUEST_UUID
+         from (
+                  select a.UW_REQUEST_UUID
+                       , value:kobCode::string                             as kobCode
+                       , value:enhancedPaymentData:accountTypeCode::string as enchanced_type_code
+                       , value:ecoa::string                                as ecoa
+                  from TDM_UNDERWRITING.CLEANSED.DIODES_OFFICIAL a
+                           inner join TDM_SANDBOX.SANDBOX.asd_2305_PL_w_SLdebt_2018_2 b
+                                      on a.UW_REQUEST_UUID = b.UW_REQUEST_UUID and b.UW_REQUEST_UUID is not null, lateral flatten(
+                          input =>
+                          uw_Request:application:applicantsList[0]:creditPull:tradelines)
+                  where (substring(kobCode, 1, 1) = 'E'
+                      or enchanced_type_code = '12') -- Student loans
+                    and trim(ecoa) = '2' --	Joint Contractual Liability
+              )
+         group by 1
+     ) b
+where a.UW_REQUEST_UUID = b.UW_REQUEST_UUID
+  and a.UW_REQUEST_UUID is not null;
+
+select substring(orig_mon,1,7) as date_fun,count(*),count(UW_REQUEST_UUID),sum(SL_ecoa_2),sum(SL_ecoa_2)/count(UW_REQUEST_UUID)
+from TDM_SANDBOX.SANDBOX.asd_2305_PL_w_SLdebt_2018_2
+group by 1
+order by 1;
+
+--Final pivot
+
+select --CURRENT_OWNER_NAME
+    tier
+     , APP_TYPE
+     --, LOAN_STATUS
+     , PL_FUNDS_USE
+     , substr(ORIG_MON, 1, 4)                                              as orig_year
+     , substr(ORIG_MON, 6, 2)                                              as orig_mon
+     , PRODUCT
+     , fraud
+     --, CREDITBUREAUSTRATEGY
+     , SL_def
+     , SL_non_def
+     , SL_open_def_ct
+     , SL_open_non_def_ct
+     , SL_open_def_bal
+     , SL_open_non_def_bal
+     , SL_open_non_def_pay
+     , case
+           when SL_open_non_def_bal = 1 then '1 Open Non Deferred'
+           when SL_open_def_bal = 1 then '2 Open Deferred'
+           else '3 No Open SL' end                                         as segment
+     , case when ORIG_MON <= '2022-04-30' then 1 else 0 end                as at_lreast_12m
+     , count(*)                                                            as loans
+     , sum(ORIG_PRIN)                                                      as orig_prin
+     , sum(SL_open_non_def_bal)                                            as SL_open_non_def_bal_sum
+     , sum(SL_open_def_bal)                                                as SL_open_def_bal_sum
+     , sum(case when SL_open_non_def_bal = 1 then ORIG_PRIN else 0 end)    as SL_open_non_def_bal_sum_orig
+     , sum(case when SL_open_def_bal = 1 then ORIG_PRIN else 0 end)        as SL_open_def_bal_sum_orig
+     , sum(case when STU5020_PRI <= 999999990 then STU5020_PRI else 0 end) as tot_non_deferred_sl_bal
+     , sum(case when STU5092_PRI <= 999999990 then STU5092_PRI else 0 end) as tot_deferred_sl_bal
+     , sum(case when STU5820_PRI <= 999999990 then STU5820_PRI else 0 end) as tot_non_deferred_sl_pymt
+     , count(UW_REQUEST_UUID)                                              as with_cb_data
+     , sum(SL_ECOA_2)                                                      as sl_ecoa_2
+     , sum(yr1_co_unit)                                                    as yr1_co_unit
+     , sum(yr1_co_dol)                                                     as yr1_co_dol
+from TDM_SANDBOX.SANDBOX.asd_2305_PL_w_SLdebt_2018_2
+where tier <> 20
+group by 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16;
+
+select id,LOAN_ID,UW_REQUEST_UUID
+from TDM_SANDBOX.SANDBOX.asd_2305_PL_w_SLdebt_2018_2
+where SL_ECOA_2=1 and UW_REQUEST_UUID is not null and coalesce(SL_open_non_def_bal,0)=0 and coalesce(SL_open_def_bal,0)=0;
+
+--13446708,1167735,4c38fa57-a968-4811-bd38-12928cd0549a
+
+select UW_REQUEST
+from TDM_UNDERWRITING.CLEANSED.DIODES_OFFICIAL
+where UW_REQUEST_UUID='4c38fa57-a968-4811-bd38-12928cd0549a'
+
